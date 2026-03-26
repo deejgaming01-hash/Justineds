@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap');
+
+@theme {
+  --font-orbitron: "Orbitron", sans-serif;
+  --font-poppins: "Poppins", sans-serif;
+  
+  --color-cyber-blue: #4fd1ff;
+  --color-cyber-green: #00ffc8;
+  --color-cyber-red: #ff6b6b;
+}
+
+@layer base {
+  body {
+    @apply bg-[#050505] text-white font-poppins overflow-hidden h-screen;
+    background-image: url("https://i.pinimg.com/736x/9b/f2/52/9bf2529f6c9dd705c7bc7d1761a5d0f5.jpg");
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+  }
+
+  body::before {
+    content: "";
+    @apply fixed inset-0 z-[-1];
+    background: linear-gradient(
+      45deg,
+      rgba(0,0,0,0.6),
+      rgba(0,0,0,0.75),
+      rgba(0,0,0,0.6)
+    );
+    background-size: 400% 400%;
+    animation: bgMove 10s ease infinite;
+  }
+}
+
+@keyframes bgMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/5 backdrop-blur-3xl border border-white/20 shadow-2xl;
+  }
+  
+  .cyber-text {
+    @apply font-orbitron tracking-widest bg-gradient-to-r from-cyber-blue to-cyber-green bg-clip-text text-transparent drop-shadow-[0_0_10px_rgba(79,209,255,0.5)];
+  }
+
+  .cyber-button {
+    @apply bg-gradient-to-br from-cyber-blue to-cyber-green text-black font-bold px-4 py-2 rounded-lg transition-all duration-300 hover:scale-105 hover:shadow-[0_0_15px_rgba(79,209,255,0.7)] active:scale-95;
+  }
+}
+
+/* Hide scrollbar but keep functionality */
+::-webkit-scrollbar {
+  width: 0px;
+  height: 0px;
+}
+
+* {
+  scrollbar-width: none;
+}
+
