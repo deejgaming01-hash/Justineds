@@ -11,33 +11,52 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'email']) &&
+      return data.keys().hasAll(['uid', 'username', 'role']) &&
              data.uid is string &&
-             data.email is string;
+             data.username is string &&
+             data.role is string;
     }
 
     function isValidLog(data) {
       return data.keys().hasAll(['uid', 'action', 'timestamp']) &&
              data.uid == request.auth.uid &&
              data.action is string &&
-             data.timestamp is string;
+             data.timestamp is timestamp;
     }
 
     // User Profiles
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create, update: if isOwner(userId) && isValidUser(request.resource.data);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
     }
 
     // Activity Logs
-    match /activityLogs/{logId} {
+    match /activity_logs/{logId} {
       allow read: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
       allow create: if isAuthenticated() && isValidLog(request.resource.data);
     }
 
+    // Login Logs
+    match /login_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+    }
+
+    // Announcements
+    match /announcements/{announcementId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+    }
+
     function isAdmin() {
       return isAuthenticated() && 
-             (request.auth.token.email == "mjdl05010710@gmail.com" && request.auth.token.email_verified == true);
+             (
+               ("email" in request.auth.token && request.auth.token.email == "mjdl05010710@gmail.com") ||
+               (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+                "role" in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'superadmin'])
+             );
     }
   }
 }

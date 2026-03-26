@@ -23,17 +23,89 @@ async function startServer() {
   });
 
   // API routes
+  app.post("/api/check-access", async (req, res) => {
+    try {
+      const { email } = req.body;
+      // Hardcoding the new sheet ID to ensure it doesn't use the old one from env vars
+      const spreadsheetId = "1jCOoDzl7hLbIpJneISIGhYF8fzg_2VEm7UjkkMiYcJM";
+
+      if (!spreadsheetId) {
+        return res.json({ allowed: false, error: "GOOGLE_SHEET_ID is not configured." });
+      }
+
+      // Always allow the superadmin
+      if (email === 'mjdl05010710@gmail.com') {
+        return res.json({ allowed: true });
+      }
+
+      // Get spreadsheet metadata to find the first sheet's name
+      const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+      const sheetsList = sheetMeta.data.sheets;
+      if (!sheetsList || sheetsList.length === 0) {
+        return res.json({ allowed: false, error: "No sheets found in the document." });
+      }
+      
+      // Try to find 'AllowedUsers' tab, otherwise fallback to the first tab
+      const allowedUsersSheet = sheetsList.find(s => s.properties?.title === 'AllowedUsers');
+      const targetSheetName = allowedUsersSheet ? 'AllowedUsers' : sheetsList[0].properties?.title;
+
+      // Read the target sheet, column A
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${targetSheetName}!A:A`,
+      });
+
+      const rows = response.data.values;
+      if (!rows) {
+        return res.json({ allowed: false, error: `No users found in ${targetSheetName} tab.` });
+      }
+
+      // Check if email exists (case insensitive)
+      const allowed = rows.some(row => row[0]?.trim().toLowerCase() === email.toLowerCase());
+      
+      if (!allowed) {
+        return res.json({ allowed: false, error: "Access Denied. Your email is not on the allowed list." });
+      }
+
+      res.json({ allowed: true });
+    } catch (error: any) {
+      console.error("Check Access Error:", error?.message || error);
+      res.json({ allowed: false, error: "Could not read AllowedUsers tab. Make sure the tab exists in your Google Sheet." });
+    }
+  });
+
   app.post("/api/logs", async (req, res) => {
     try {
       const { email, action, details, timestamp } = req.body;
-      const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+      // Hardcoding the new sheet ID
+      const spreadsheetId = "1jCOoDzl7hLbIpJneISIGhYF8fzg_2VEm7UjkkMiYcJM";
 
       if (!spreadsheetId) {
         console.warn("GOOGLE_SHEET_ID is not configured. Skipping Sheets log.");
         return res.json({ success: true, message: "Sheets ID missing, log skipped" });
       }
 
-      await sheets.spreadsheets.values.append({
+      // Check if we have Service Account credentials (required for writing to Sheets)
+      if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+        // We only have an API key, which is read-only. We cannot append.
+        return res.json({ 
+          success: false, 
+          message: "Writing to Google Sheets requires a Service Account (OAuth2). API keys are read-only. Skipping Sheets log." 
+        });
+      }
+
+      // If we do have a service account, we need to create an auth client for it
+      const authClient = new google.auth.GoogleAuth({
+        credentials: {
+          client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+          private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+
+      const authSheets = google.sheets({ version: 'v4', auth: authClient });
+
+      await authSheets.spreadsheets.values.append({
         spreadsheetId,
         range: "Sheet1!A:D", // Adjust if your sheet name is different
         valueInputOption: "RAW",

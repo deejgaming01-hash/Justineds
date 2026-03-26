@@ -51,6 +51,64 @@ import { FOLDER_MAP, PDF_LINKS, TOPIC_NAMES } from './constants';
 
 // --- Components ---
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  
+  // Don't throw if the user is signed out, as this is expected during logout
+  if (!auth.currentUser) {
+    console.warn("Ignoring Firestore error because user is signed out.");
+    return;
+  }
+  
+  throw new Error(JSON.stringify(errInfo));
+}
+
 const LoadingScreen = ({ message = "Processing..." }: { message?: string }) => (
   <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/40 backdrop-blur-md">
     <div className="w-16 h-16 border-4 border-white/20 border-t-cyber-blue rounded-full animate-spin" />
@@ -104,32 +162,75 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        // 1. Check if user is allowed via Google Sheets
+        try {
+          const checkRes = await fetch('/api/check-access', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: firebaseUser.email })
+          });
+          const { allowed, error } = await checkRes.json();
+          
+          if (!allowed) {
+            await signOut(auth);
+            setUser(null);
+            setLoading(false);
+            setPopup({ 
+              message: error || "Access Denied. Your email is not on the allowed list.", 
+              icon: <ShieldAlert className="text-cyber-red" /> 
+            });
+            return;
+          }
+        } catch (err) {
+          console.error("Access check failed:", err);
+          await signOut(auth);
+          setUser(null);
+          setLoading(false);
+          setPopup({ message: "Failed to verify access.", icon: <AlertCircle className="text-cyber-red" /> });
+          return;
+        }
+
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
         if (userDoc.exists()) {
           const userData = userDoc.data() as User;
-          setUser(userData);
+          
+          // Ensure old documents get updated with new required fields
+          const updates: any = { status: 'ONLINE', flag: '' };
+          if (!userData.username) updates.username = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User';
+          if (!userData.role) updates.role = firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user';
+          if (!userData.uid) updates.uid = firebaseUser.uid;
+          
+          setUser({ ...userData, ...updates });
           
           // Log login
           await addDoc(collection(db, 'login_logs'), {
             timestamp: Timestamp.now(),
-            username: userData.username,
+            username: updates.username || userData.username,
             status: 'SUCCESS',
             device: navigator.userAgent
           });
           
-          // Update status to ONLINE
-          await updateDoc(doc(db, 'users', firebaseUser.uid), { status: 'ONLINE', flag: '' });
+          // Update status to ONLINE and add missing fields
+          await updateDoc(doc(db, 'users', firebaseUser.uid), updates);
         } else {
           // Create new user if doesn't exist (default role: user)
-          const newUser: User = {
+          const newUser: any = {
             uid: firebaseUser.uid,
             username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
             role: firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user',
             status: 'ONLINE',
-            profilePic: firebaseUser.photoURL || undefined
           };
+          if (firebaseUser.photoURL) newUser.profilePic = firebaseUser.photoURL;
           await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
-          setUser(newUser);
+          setUser(newUser as User);
+          
+          // Log login for new user
+          await addDoc(collection(db, 'login_logs'), {
+            timestamp: Timestamp.now(),
+            username: newUser.username,
+            status: 'SUCCESS_NEW_USER',
+            device: navigator.userAgent
+          });
         }
       } else {
         setUser(null);
@@ -146,6 +247,8 @@ export default function App() {
       const q = query(collection(db, 'announcements'), orderBy('timestamp', 'desc'), limit(10));
       const unsubAnnouncements = onSnapshot(q, (snapshot) => {
         setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Announcement)));
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'announcements');
       });
 
       // Listen for user status (to handle kicks)
@@ -157,6 +260,8 @@ export default function App() {
             setPopup({ message: "You were kicked by admin", icon: <AlertCircle className="text-cyber-red" /> });
           }
         }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
       });
 
       // Inactivity timer
@@ -195,10 +300,12 @@ export default function App() {
     setLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (error) {
+      // Loading state will be handled by onAuthStateChanged
+    } catch (error: any) {
       console.error("Login Error:", error);
-      setPopup({ message: "Login failed", icon: <AlertCircle className="text-cyber-red" /> });
-    } finally {
+      if (error.code !== 'auth/popup-closed-by-user') {
+        setPopup({ message: "Login failed", icon: <AlertCircle className="text-cyber-red" /> });
+      }
       setLoading(false);
     }
   };
@@ -218,13 +325,14 @@ export default function App() {
       
       // 1. Log to Firestore
       try {
-        await addDoc(collection(db, 'activity_logs'), {
+        const logData: any = {
           timestamp: serverTimestamp(),
           username: user.username,
           uid: user.uid,
           action,
-          details
-        });
+        };
+        if (details) logData.details = details;
+        await addDoc(collection(db, 'activity_logs'), logData);
       } catch (e) {
         console.error("Firestore Log Error:", e);
       }
