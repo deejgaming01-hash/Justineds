@@ -137,6 +137,7 @@ const Popup = ({ message, icon, onClose }: { message: string, icon: React.ReactN
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [activePage, setActivePage] = useState('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -175,6 +176,7 @@ export default function App() {
             await signOut(auth);
             setUser(null);
             setLoading(false);
+            setLoginLoading(false);
             setPopup({ 
               message: error || "Access Denied. Your email is not on the allowed list.", 
               icon: <ShieldAlert className="text-cyber-red" /> 
@@ -186,6 +188,7 @@ export default function App() {
           await signOut(auth);
           setUser(null);
           setLoading(false);
+          setLoginLoading(false);
           setPopup({ message: "Failed to verify access.", icon: <AlertCircle className="text-cyber-red" /> });
           return;
         }
@@ -236,6 +239,7 @@ export default function App() {
         setUser(null);
       }
       setLoading(false);
+      setLoginLoading(false);
     });
 
     return () => unsubscribe();
@@ -255,9 +259,8 @@ export default function App() {
       const unsubUser = onSnapshot(doc(db, 'users', user.uid), (doc) => {
         if (doc.exists()) {
           const data = doc.data() as User;
-          if (data.flag === 'KICKED' || data.status === 'OFFLINE') {
-            handleLogout();
-            setPopup({ message: "You were kicked by admin", icon: <AlertCircle className="text-cyber-red" /> });
+          if (data.flag === 'KICKED') {
+            handleLogout(true);
           }
         }
       }, (error) => {
@@ -297,7 +300,7 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async () => {
-    setLoading(true);
+    setLoginLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
       // Loading state will be handled by onAuthStateChanged
@@ -306,16 +309,23 @@ export default function App() {
       if (error.code !== 'auth/popup-closed-by-user') {
         setPopup({ message: "Login failed", icon: <AlertCircle className="text-cyber-red" /> });
       }
-      setLoading(false);
+      setLoginLoading(false);
     }
   };
 
-  const handleLogout = async () => {
-    if (user) {
-      await updateDoc(doc(db, 'users', user.uid), { status: 'OFFLINE' });
+  const handleLogout = async (kicked: boolean = false) => {
+    if (user && auth.currentUser) {
+      try {
+        await updateDoc(doc(db, 'users', user.uid), { status: 'OFFLINE' });
+      } catch (e) {
+        console.error("Error updating status on logout:", e);
+      }
       await signOut(auth);
       setUser(null);
       setActivePage('home');
+      if (kicked) {
+        setPopup({ message: "You were kicked by admin", icon: <AlertCircle className="text-cyber-red" /> });
+      }
     }
   };
 
@@ -525,8 +535,12 @@ export default function App() {
         >
           <h1 className="text-4xl font-black cyber-text mb-8">Justine & Friends</h1>
           <p className="text-white/60 mb-8">Welcome to the futuristic learning portal. Please sign in to continue.</p>
-          <button onClick={handleLogin} className="cyber-button w-full py-4 text-lg">
-            Login with Google
+          <button 
+            onClick={handleLogin} 
+            disabled={loginLoading}
+            className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loginLoading ? "Logging in..." : "Login with Google"}
           </button>
         </motion.div>
       </div>
@@ -563,7 +577,7 @@ export default function App() {
             <span className="animate-pulse text-cyber-blue">⏳</span>
             {formatTime(timeLeft)}
           </div>
-          <button onClick={handleLogout} className="p-2 bg-cyber-red/20 hover:bg-cyber-red/40 text-cyber-red rounded-lg transition-colors">
+          <button onClick={() => handleLogout(false)} className="p-2 bg-cyber-red/20 hover:bg-cyber-red/40 text-cyber-red rounded-lg transition-colors">
             <LogOut size={18} />
           </button>
         </div>
