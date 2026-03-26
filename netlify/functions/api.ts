@@ -21,6 +21,10 @@ const router = express.Router();
 
 router.post("/check-access", async (req, res) => {
   try {
+    if (!process.env.GOOGLE_DRIVE_API_KEY) {
+      return res.json({ allowed: false, error: "GOOGLE_DRIVE_API_KEY is missing in Netlify environment variables." });
+    }
+
     const { email } = req.body;
     const spreadsheetId = "1jCOoDzl7hLbIpJneISIGhYF8fzg_2VEm7UjkkMiYcJM";
 
@@ -139,7 +143,7 @@ router.get("/drive/images/:folderId", async (req, res) => {
   }
 });
 
-// We mount the router at the root, and let serverless-http handle the base path
-app.use("/", router);
+app.use("/api", router);
+app.use("/.netlify/functions/api", router);
 
-export const handler = serverless(app, { basePath: '/.netlify/functions/api' });
+export const handler = serverless(app);

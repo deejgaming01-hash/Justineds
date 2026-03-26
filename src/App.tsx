@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  auth, db, googleProvider, signInWithPopup, signOut, onAuthStateChanged
+  auth, db, googleProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged
 } from './firebase';
 import { 
   doc, 
@@ -161,6 +161,16 @@ export default function App() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    // Check for redirect result if we used signInWithRedirect
+    getRedirectResult(auth).then((result) => {
+      if (result) {
+        console.log("Redirect login succeeded for:", result.user.email);
+      }
+    }).catch((error) => {
+      console.error("Redirect login error:", error);
+      setPopup({ message: `Redirect login failed: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+    });
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         // 1. Check if user is allowed via Google Sheets
@@ -170,6 +180,12 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: firebaseUser.email })
           });
+          
+          if (!checkRes.ok) {
+            const text = await checkRes.text();
+            throw new Error(`Server returned ${checkRes.status}: ${text.substring(0, 100)}`);
+          }
+          
           const { allowed, error } = await checkRes.json();
           
           if (!allowed) {
@@ -183,13 +199,13 @@ export default function App() {
             });
             return;
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Access check failed:", err);
           await signOut(auth);
           setUser(null);
           setLoading(false);
           setLoginLoading(false);
-          setPopup({ message: "Failed to verify access.", icon: <AlertCircle className="text-cyber-red" /> });
+          setPopup({ message: `Failed to verify access: ${err?.message || 'Server error'}. Check Netlify logs.`, icon: <AlertCircle className="text-cyber-red" /> });
           return;
         }
 
@@ -300,14 +316,29 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async () => {
+    console.log("Starting login process...");
     setLoginLoading(true);
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      console.log("signInWithPopup succeeded for:", result.user.email);
       // Loading state will be handled by onAuthStateChanged
     } catch (error: any) {
-      console.error("Login Error:", error);
-      if (error.code !== 'auth/popup-closed-by-user') {
-        setPopup({ message: "Login failed", icon: <AlertCircle className="text-cyber-red" /> });
+      console.error("Login Error details:", error);
+      
+      // Fallback to redirect if popup is blocked or unsupported
+      if (error.code === 'auth/popup-blocked' || error.code === 'auth/web-storage-unsupported') {
+        console.log("Popup blocked or unsupported, falling back to redirect...");
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return; // Exit early, redirect will handle the rest
+        } catch (redirectError: any) {
+          console.error("Redirect login failed:", redirectError);
+          setPopup({ message: `Redirect login failed: ${redirectError.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+        }
+      } else if (error.code !== 'auth/popup-closed-by-user') {
+        setPopup({ message: `Login failed: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+      } else {
+        console.log("User closed the popup manually.");
       }
       setLoginLoading(false);
     }
