@@ -143,6 +143,37 @@ router.get("/drive/images/:folderId", async (req, res) => {
   }
 });
 
+router.get("/drive/quiz/:folderId", async (req, res) => {
+  try {
+    const { folderId } = req.params;
+    if (!folderId) return res.status(400).json({ error: "Folder ID is required" });
+
+    if (!process.env.GOOGLE_DRIVE_API_KEY) {
+      return res.status(500).json({ error: "Google Drive API key is not configured" });
+    }
+
+    const response = await drive.files.list({
+      q: `'${folderId}' in parents and name = 'quiz.txt' and trashed = false`,
+      fields: "files(id, name)",
+    });
+
+    if (!response.data.files || response.data.files.length === 0) {
+      return res.json({ quiz: null });
+    }
+
+    const fileId = response.data.files[0].id;
+    const fileRes = await drive.files.get({
+      fileId: fileId as string,
+      alt: 'media',
+    }, { responseType: 'text' });
+
+    res.json({ quiz: fileRes.data });
+  } catch (error: any) {
+    console.error("Quiz Drive Error:", error?.message || error);
+    res.status(500).json({ error: error?.message || "Failed to fetch quiz from Google Drive" });
+  }
+});
+
 app.use("/api", router);
 app.use("/.netlify/functions/api", router);
 

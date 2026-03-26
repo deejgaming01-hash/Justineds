@@ -106,7 +106,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     return;
   }
   
-  throw new Error(JSON.stringify(errInfo));
+  // We log the error but do not throw to prevent the app from crashing
+  // throw new Error(JSON.stringify(errInfo));
 }
 
 const LoadingScreen = ({ message = "Processing..." }: { message?: string }) => (
@@ -209,7 +210,14 @@ export default function App() {
           return;
         }
 
-        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        let userDoc;
+        try {
+          userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        } catch (e) {
+          handleFirestoreError(e, OperationType.GET, `users/${firebaseUser.uid}`);
+          return;
+        }
+        
         if (userDoc.exists()) {
           const userData = userDoc.data() as User;
           
@@ -222,15 +230,23 @@ export default function App() {
           setUser({ ...userData, ...updates });
           
           // Log login
-          await addDoc(collection(db, 'login_logs'), {
-            timestamp: Timestamp.now(),
-            username: updates.username || userData.username,
-            status: 'SUCCESS',
-            device: navigator.userAgent
-          });
+          try {
+            await addDoc(collection(db, 'login_logs'), {
+              timestamp: Timestamp.now(),
+              username: updates.username || userData.username,
+              status: 'SUCCESS',
+              device: navigator.userAgent
+            });
+          } catch (e) {
+            handleFirestoreError(e, OperationType.CREATE, 'login_logs');
+          }
           
           // Update status to ONLINE and add missing fields
-          await updateDoc(doc(db, 'users', firebaseUser.uid), updates);
+          try {
+            await updateDoc(doc(db, 'users', firebaseUser.uid), updates);
+          } catch (e) {
+            handleFirestoreError(e, OperationType.UPDATE, `users/${firebaseUser.uid}`);
+          }
         } else {
           // Create new user if doesn't exist (default role: user)
           const newUser: any = {
@@ -240,16 +256,24 @@ export default function App() {
             status: 'ONLINE',
           };
           if (firebaseUser.photoURL) newUser.profilePic = firebaseUser.photoURL;
-          await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+          try {
+            await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+          } catch (e) {
+            handleFirestoreError(e, OperationType.CREATE, `users/${firebaseUser.uid}`);
+          }
           setUser(newUser as User);
           
           // Log login for new user
-          await addDoc(collection(db, 'login_logs'), {
-            timestamp: Timestamp.now(),
-            username: newUser.username,
-            status: 'SUCCESS_NEW_USER',
-            device: navigator.userAgent
-          });
+          try {
+            await addDoc(collection(db, 'login_logs'), {
+              timestamp: Timestamp.now(),
+              username: newUser.username,
+              status: 'SUCCESS_NEW_USER',
+              device: navigator.userAgent
+            });
+          } catch (e) {
+            handleFirestoreError(e, OperationType.CREATE, 'login_logs');
+          }
         }
       } else {
         setUser(null);
@@ -475,7 +499,8 @@ export default function App() {
       }
 
       // 2. Fallback to Gemini AI if no quiz.txt found
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `Generate 5 multiple choice questions for the topic "${topic}" in ${subject}. 
       Return the result as a JSON array of objects with the following structure:
       {
@@ -526,11 +551,15 @@ export default function App() {
 
   const loadAdminData = async () => {
     if (user?.role === 'admin' || user?.role === 'superadmin') {
-      const usersSnap = await getDocs(collection(db, 'users'));
-      setAllUsers(usersSnap.docs.map(doc => doc.data() as User));
-      
-      const logsSnap = await getDocs(query(collection(db, 'activity_logs'), orderBy('timestamp', 'desc'), limit(50)));
-      setActivityLogs(logsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityLog)));
+      try {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        setAllUsers(usersSnap.docs.map(doc => doc.data() as User));
+        
+        const logsSnap = await getDocs(query(collection(db, 'activity_logs'), orderBy('timestamp', 'desc'), limit(50)));
+        setActivityLogs(logsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityLog)));
+      } catch (e) {
+        handleFirestoreError(e, OperationType.LIST, 'admin_data');
+      }
     }
   };
 
@@ -542,9 +571,13 @@ export default function App() {
 
   const kickUser = async (targetUid: string) => {
     if (user?.role === 'superadmin') {
-      await updateDoc(doc(db, 'users', targetUid), { flag: 'KICKED', status: 'OFFLINE' });
-      setPopup({ message: "User kicked", icon: <CheckCircle2 className="text-cyber-green" /> });
-      loadAdminData();
+      try {
+        await updateDoc(doc(db, 'users', targetUid), { flag: 'KICKED', status: 'OFFLINE' });
+        setPopup({ message: "User kicked", icon: <CheckCircle2 className="text-cyber-green" /> });
+        loadAdminData();
+      } catch (e) {
+        handleFirestoreError(e, OperationType.UPDATE, `users/${targetUid}`);
+      }
     }
   };
 

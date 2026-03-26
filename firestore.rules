@@ -11,10 +11,9 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'username', 'role']) &&
-             data.uid is string &&
-             data.username is string &&
-             data.role is string;
+      return (!('uid' in data) || data.uid is string) &&
+             (!('username' in data) || data.username is string) &&
+             (!('role' in data) || data.role is string);
     }
 
     function isValidLog(data) {
