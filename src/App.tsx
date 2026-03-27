@@ -235,6 +235,7 @@ export default function App() {
     })()
   ).current;
 
+  const isLoggingIn = useRef(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -286,21 +287,17 @@ export default function App() {
                 return;
               }
 
-              // CONCURRENT SESSION CHECK
-              if (userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId && userData.lastSeen) {
-                const lastSeen = userData.lastSeen.toDate();
-                const now = new Date();
-                const diffInSeconds = (now.getTime() - lastSeen.getTime()) / 1000;
-                
-                if (diffInSeconds < 120) { // 2 minutes threshold
-                  await signOut(auth);
-                  setUser(null);
-                  setPopup({ 
-                    message: "Account is already online. Please log out from other devices first.", 
-                    icon: <AlertCircle className="text-cyber-red" /> 
-                  });
-                  return;
-                }
+              // CONCURRENT SESSION CHECK: If someone else logged in with a different sessionId, log us out.
+              // We skip this check if we are currently in the middle of logging in to avoid race conditions.
+              if (!isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId) {
+                console.log("Concurrent session detected. Current:", currentSessionId, "In Firestore:", userData.sessionId);
+                await signOut(auth);
+                setUser(null);
+                setPopup({ 
+                  message: "You have been logged out because your account is active in another session.", 
+                  icon: <AlertCircle className="text-cyber-red" /> 
+                });
+                return;
               }
 
               const newUser: User = {
@@ -637,6 +634,7 @@ export default function App() {
               icon: <AlertCircle className="text-cyber-red" /> 
             });
             setLoginLoading(false);
+            isLoggingIn.current = false;
             return;
           }
         }
@@ -646,28 +644,6 @@ export default function App() {
       const userCredential = await signInWithEmailAndPassword(auth, loginEmail, trimmedPassword);
       console.log("Firebase Auth success for UID:", userCredential.user.uid);
       
-      // Check if account is already online
-      const userDocSnap = await getDoc(doc(db, 'users', userCredential.user.uid));
-      if (userDocSnap.exists()) {
-        const userData = userDocSnap.data();
-        // If status is ONLINE and lastSeen is within the last 2 minutes, block login
-        if (userData.status === 'ONLINE' && userData.lastSeen) {
-          const lastSeen = userData.lastSeen.toDate();
-          const now = new Date();
-          const diffInSeconds = (now.getTime() - lastSeen.getTime()) / 1000;
-          
-          if (diffInSeconds < 120) { // 2 minutes threshold
-            await signOut(auth);
-            setPopup({ 
-              message: "Account is already online. Please log out from other devices first.", 
-              icon: <AlertCircle className="text-cyber-red" /> 
-            });
-            setLoginLoading(false);
-            return;
-          }
-        }
-      }
-      
       // Bypass verification for superadmin
       if (!userCredential.user.emailVerified && userCredential.user.email !== 'mjdl05010710@gmail.com') {
         console.log("Email not verified during login, redirecting to verify screen");
@@ -675,6 +651,7 @@ export default function App() {
         setAuthMode('verify');
         setPopup({ message: "Please verify your email before logging in.", icon: <AlertCircle className="text-cyber-red" /> });
         setLoginLoading(false);
+        isLoggingIn.current = false;
         return;
       }
       
@@ -705,7 +682,9 @@ export default function App() {
       }
       
       setLoginLoading(false);
+      isLoggingIn.current = false;
     } catch (error: any) {
+      isLoggingIn.current = false;
       console.error("Login failed with error:", error);
       if (error.code === 'auth/invalid-credential') {
         let message = `Login failed. Please check your credentials.`;
@@ -775,6 +754,7 @@ export default function App() {
     }
     
     setLoginLoading(true);
+    isLoggingIn.current = true;
     console.log("Attempting signup for:", trimmedEmail, "with username:", trimmedName);
     try {
       // Check if username is already taken
@@ -827,6 +807,7 @@ export default function App() {
       }
     } finally {
       setLoginLoading(false);
+      isLoggingIn.current = false;
     }
   };
 
