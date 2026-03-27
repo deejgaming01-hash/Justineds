@@ -173,113 +173,113 @@ export default function App() {
     });
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        // 1. Check if user is allowed via Google Sheets
-        try {
-          const checkRes = await fetch('/api/check-access', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: firebaseUser.email })
-          });
-          
-          if (!checkRes.ok) {
-            const text = await checkRes.text();
-            throw new Error(`Server returned ${checkRes.status}: ${text.substring(0, 100)}`);
-          }
-          
-          const { allowed, error } = await checkRes.json();
-          
-          if (!allowed) {
+      try {
+        if (firebaseUser) {
+          // 1. Check if user is allowed via Google Sheets
+          try {
+            const checkRes = await fetch('/api/check-access', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: firebaseUser.email })
+            });
+            
+            if (!checkRes.ok) {
+              const text = await checkRes.text();
+              throw new Error(`Server returned ${checkRes.status}: ${text.substring(0, 100)}`);
+            }
+            
+            const { allowed, error } = await checkRes.json();
+            
+            if (!allowed) {
+              await signOut(auth);
+              setUser(null);
+              setPopup({ 
+                message: error || "Access Denied. Your email is not on the allowed list.", 
+                icon: <ShieldAlert className="text-cyber-red" /> 
+              });
+              return;
+            }
+          } catch (err: any) {
+            console.error("Access check failed:", err);
             await signOut(auth);
             setUser(null);
-            setLoading(false);
-            setLoginLoading(false);
-            setPopup({ 
-              message: error || "Access Denied. Your email is not on the allowed list.", 
-              icon: <ShieldAlert className="text-cyber-red" /> 
-            });
+            setPopup({ message: `Failed to verify access: ${err?.message || 'Server error'}. Check Netlify logs.`, icon: <AlertCircle className="text-cyber-red" /> });
             return;
           }
-        } catch (err: any) {
-          console.error("Access check failed:", err);
-          await signOut(auth);
-          setUser(null);
-          setLoading(false);
-          setLoginLoading(false);
-          setPopup({ message: `Failed to verify access: ${err?.message || 'Server error'}. Check Netlify logs.`, icon: <AlertCircle className="text-cyber-red" /> });
-          return;
-        }
 
-        let userDoc;
-        try {
-          userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        } catch (e) {
-          handleFirestoreError(e, OperationType.GET, `users/${firebaseUser.uid}`);
-          return;
-        }
-        
-        if (userDoc.exists()) {
-          const userData = userDoc.data() as User;
-          
-          // Ensure old documents get updated with new required fields
-          const updates: any = { status: 'ONLINE', flag: '' };
-          if (!userData.username) updates.username = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User';
-          if (!userData.role) updates.role = firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user';
-          if (!userData.uid) updates.uid = firebaseUser.uid;
-          
-          setUser({ ...userData, ...updates });
-          
-          // Log login
+          let userDoc;
           try {
-            await addDoc(collection(db, 'login_logs'), {
-              timestamp: Timestamp.now(),
-              username: updates.username || userData.username,
-              status: 'SUCCESS',
-              device: navigator.userAgent
-            });
+            userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           } catch (e) {
-            handleFirestoreError(e, OperationType.CREATE, 'login_logs');
+            handleFirestoreError(e, OperationType.GET, `users/${firebaseUser.uid}`);
+            setPopup({ message: "Database connection failed. Please check your internet or disable adblockers.", icon: <AlertCircle className="text-cyber-red" /> });
+            return;
           }
           
-          // Update status to ONLINE and add missing fields
-          try {
-            await updateDoc(doc(db, 'users', firebaseUser.uid), updates);
-          } catch (e) {
-            handleFirestoreError(e, OperationType.UPDATE, `users/${firebaseUser.uid}`);
+          if (userDoc.exists()) {
+            const userData = userDoc.data() as User;
+            
+            // Ensure old documents get updated with new required fields
+            const updates: any = { status: 'ONLINE', flag: '' };
+            if (!userData.username) updates.username = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User';
+            if (!userData.role) updates.role = firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user';
+            if (!userData.uid) updates.uid = firebaseUser.uid;
+            
+            setUser({ ...userData, ...updates });
+            
+            // Log login
+            try {
+              await addDoc(collection(db, 'login_logs'), {
+                timestamp: Timestamp.now(),
+                username: updates.username || userData.username,
+                status: 'SUCCESS',
+                device: navigator.userAgent
+              });
+            } catch (e) {
+              handleFirestoreError(e, OperationType.CREATE, 'login_logs');
+            }
+            
+            // Update status to ONLINE and add missing fields
+            try {
+              await updateDoc(doc(db, 'users', firebaseUser.uid), updates);
+            } catch (e) {
+              handleFirestoreError(e, OperationType.UPDATE, `users/${firebaseUser.uid}`);
+            }
+          } else {
+            // Create new user if doesn't exist (default role: user)
+            const newUser: any = {
+              uid: firebaseUser.uid,
+              username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+              role: firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user',
+              status: 'ONLINE',
+            };
+            if (firebaseUser.photoURL) newUser.profilePic = firebaseUser.photoURL;
+            try {
+              await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+            } catch (e) {
+              handleFirestoreError(e, OperationType.CREATE, `users/${firebaseUser.uid}`);
+            }
+            setUser(newUser as User);
+            
+            // Log login for new user
+            try {
+              await addDoc(collection(db, 'login_logs'), {
+                timestamp: Timestamp.now(),
+                username: newUser.username,
+                status: 'SUCCESS_NEW_USER',
+                device: navigator.userAgent
+              });
+            } catch (e) {
+              handleFirestoreError(e, OperationType.CREATE, 'login_logs');
+            }
           }
         } else {
-          // Create new user if doesn't exist (default role: user)
-          const newUser: any = {
-            uid: firebaseUser.uid,
-            username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-            role: firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user',
-            status: 'ONLINE',
-          };
-          if (firebaseUser.photoURL) newUser.profilePic = firebaseUser.photoURL;
-          try {
-            await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
-          } catch (e) {
-            handleFirestoreError(e, OperationType.CREATE, `users/${firebaseUser.uid}`);
-          }
-          setUser(newUser as User);
-          
-          // Log login for new user
-          try {
-            await addDoc(collection(db, 'login_logs'), {
-              timestamp: Timestamp.now(),
-              username: newUser.username,
-              status: 'SUCCESS_NEW_USER',
-              device: navigator.userAgent
-            });
-          } catch (e) {
-            handleFirestoreError(e, OperationType.CREATE, 'login_logs');
-          }
+          setUser(null);
         }
-      } else {
-        setUser(null);
+      } finally {
+        setLoading(false);
+        setLoginLoading(false);
       }
-      setLoading(false);
-      setLoginLoading(false);
     });
 
     return () => unsubscribe();
@@ -342,11 +342,23 @@ export default function App() {
   const handleLogin = async () => {
     console.log("Starting login process...");
     setLoginLoading(true);
+    
+    // Safety timeout: if login hangs (common in WebViews/mobile apps), reset the button
+    const timeoutId = setTimeout(() => {
+      setLoginLoading(false);
+      setPopup({ 
+        message: "Login timed out. If you are using a mobile app, please use the 'Mobile App Login' button below.", 
+        icon: <AlertCircle className="text-cyber-red" /> 
+      });
+    }, 15000); // 15 seconds timeout
+
     try {
       const result = await signInWithPopup(auth, googleProvider);
+      clearTimeout(timeoutId);
       console.log("signInWithPopup succeeded for:", result.user.email);
       // Loading state will be handled by onAuthStateChanged
     } catch (error: any) {
+      clearTimeout(timeoutId);
       console.error("Login Error details:", error);
       
       // Fallback to redirect if popup is blocked or unsupported
@@ -364,6 +376,18 @@ export default function App() {
       } else {
         console.log("User closed the popup manually.");
       }
+      setLoginLoading(false);
+    }
+  };
+
+  const handleRedirectLogin = async () => {
+    console.log("Starting redirect login process...");
+    setLoginLoading(true);
+    try {
+      await signInWithRedirect(auth, googleProvider);
+    } catch (error: any) {
+      console.error("Redirect login failed:", error);
+      setPopup({ message: `Redirect login failed: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
       setLoginLoading(false);
     }
   };
@@ -605,6 +629,14 @@ export default function App() {
             className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loginLoading ? "Logging in..." : "Login with Google"}
+          </button>
+          
+          <button 
+            onClick={handleRedirectLogin} 
+            disabled={loginLoading}
+            className="mt-6 text-sm text-white/50 hover:text-white underline transition-colors"
+          >
+            Using a mobile app? Click here to login
           </button>
         </motion.div>
       </div>
