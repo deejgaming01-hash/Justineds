@@ -9,6 +9,7 @@ export interface User {
   flag?: string;
   profilePic?: string;
   subjects?: string[];
+  sessionId?: string;
 }
 
 export interface Announcement {

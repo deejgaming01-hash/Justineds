@@ -110,3 +110,36 @@ export const TOPIC_NAMES: Record<string, string[]> = {
     "Physical Self", "Relationships", "Growth", "Reflection"
   ]
 };
+
+// Add your photo URLs here! You can use links from Imgur, Google Drive (direct links), or any image hosting site.
+// If you leave a string empty (""), it will use a default placeholder image.
+export const TOPIC_IMAGES: Record<string, string[]> = {
+  PHYSICS: [
+    "", "", "", "",
+    "", "", "", ""
+  ],
+  MFE: [
+    "", "", "", "",
+    "", "", "", ""
+  ],
+  INTEGRAL: [
+    "", "", "", "",
+    "", "", "", ""
+  ],
+  TCW: [
+    "", "", "", "",
+    "", "", "", ""
+  ],
+  ENTREP: [
+    "", "", "", "",
+    "", "", "", ""
+  ],
+  LITE: [
+    "", "", "", "",
+    "", "", "", ""
+  ],
+  UTS: [
+    "", "", "", "",
+    "", "", "", ""
+  ]
+};

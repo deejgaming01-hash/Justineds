@@ -1,21 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  auth, db, googleProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged
+  auth, db, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile
 } from './firebase';
 import { 
   doc, 
   getDoc, 
   setDoc, 
+  deleteDoc,
   onSnapshot, 
   collection, 
   query, 
   orderBy, 
   limit,
   addDoc,
+  where,
   Timestamp,
   updateDoc,
   getDocs,
-  serverTimestamp
+  serverTimestamp,
+  getDocFromServer
 } from 'firebase/firestore';
 import { 
   LogOut, 
@@ -41,7 +44,15 @@ import {
   Search,
   Plus,
   Trash2,
-  ShieldAlert
+  ShieldAlert,
+  Lock,
+  Mail,
+  ArrowRight,
+  Folder,
+  Users,
+  File,
+  ShieldCheck,
+  Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenAI } from "@google/genai";
@@ -99,15 +110,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  
-  // Don't throw if the user is signed out, as this is expected during logout
-  if (!auth.currentUser) {
-    console.warn("Ignoring Firestore error because user is signed out.");
-    return;
-  }
-  
-  // We log the error but do not throw to prevent the app from crashing
-  // throw new Error(JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }
 
 const LoadingScreen = ({ message = "Processing..." }: { message?: string }) => (
@@ -133,16 +136,43 @@ const Popup = ({ message, icon, onClose }: { message: string, icon: React.ReactN
   </motion.div>
 );
 
+const ConfirmModal = ({ message, onConfirm, onCancel }: { message: string, onConfirm: () => void, onCancel: () => void }) => (
+  <motion.div 
+    initial={{ opacity: 0, scale: 0.8 }}
+    animate={{ opacity: 1, scale: 1 }}
+    exit={{ opacity: 0, scale: 0.8 }}
+    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    onClick={onCancel}
+  >
+    <div className="glass p-8 rounded-3xl text-center max-w-sm w-full mx-4 space-y-6" onClick={e => e.stopPropagation()}>
+      <div className="text-4xl flex justify-center text-cyber-red"><ShieldAlert size={48} /></div>
+      <p className="text-lg font-bold">{message}</p>
+      <div className="flex gap-4">
+        <button onClick={onCancel} className="flex-1 bg-white/5 hover:bg-white/10 py-3 rounded-2xl font-bold transition-colors">Cancel</button>
+        <button onClick={() => { onConfirm(); onCancel(); }} className="flex-1 bg-cyber-red/20 text-cyber-red hover:bg-cyber-red/30 py-3 rounded-2xl font-bold transition-all border border-cyber-red/30">Confirm</button>
+      </div>
+    </div>
+  </motion.div>
+);
+
 // --- Main App ---
+
+
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [verificationEmail, setVerificationEmail] = useState('');
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'verify'>('signin');
   const [activePage, setActivePage] = useState('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [popup, setPopup] = useState<{ message: string, icon: React.ReactNode } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{ message: string, onConfirm: () => void } | null>(null);
   const [currentSubject, setCurrentSubject] = useState<string | null>(null);
   const [currentTopic, setCurrentTopic] = useState<string | null>(null);
   const [viewerImages, setViewerImages] = useState<string[]>([]);
@@ -157,129 +187,248 @@ export default function App() {
 
   // Admin states
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<User[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+
+  // Profile states
+  const [myFolders, setMyFolders] = useState<any[]>([]);
+  const [myFiles, setMyFiles] = useState<any[]>([]);
+  const [myNotes, setMyNotes] = useState<any[]>([]);
+  const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  // Modals
+  const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
+  const [isFileModalOpen, setIsFileModalOpen] = useState(false);
+  const [isNoteModalOpen, setIsNoteModalOpen] = useState(false);
+  const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
+
+  // Form states
+  const [newFolderName, setNewFolderName] = useState('');
+  const [newFileName, setNewFileName] = useState('');
+  const [newFileFolder, setNewFileFolder] = useState('');
+  const [newFileSize, setNewFileSize] = useState('');
+  const [newNoteTitle, setNewNoteTitle] = useState('');
+  const [newNoteContent, setNewNoteContent] = useState('');
+  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberRole, setNewMemberRole] = useState('');
+
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if(error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. ");
+        }
+      }
+    }
+    testConnection();
+  }, []);
+
+  const currentSessionId = useRef(
+    sessionStorage.getItem('app_session_id') || 
+    (() => {
+      const id = Math.random().toString(36).substring(7);
+      sessionStorage.setItem('app_session_id', id);
+      return id;
+    })()
+  ).current;
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // Check for redirect result if we used signInWithRedirect
-    getRedirectResult(auth).then((result) => {
-      if (result) {
-        console.log("Redirect login succeeded for:", result.user.email);
+    let userDocUnsubscribe: (() => void) | null = null;
+    const authUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      console.log("Auth state changed:", firebaseUser?.uid, "Verified:", firebaseUser?.emailVerified);
+      
+      if (userDocUnsubscribe) {
+        userDocUnsubscribe();
+        userDocUnsubscribe = null;
       }
-    }).catch((error) => {
-      console.error("Redirect login error:", error);
-      setPopup({ message: `Redirect login failed: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
-    });
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
         if (firebaseUser) {
-          // 1. Check if user is allowed via Google Sheets
+          // Force reload to get latest emailVerified status
           try {
-            const checkRes = await fetch('/api/check-access', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: firebaseUser.email })
-            });
-            
-            if (!checkRes.ok) {
-              const text = await checkRes.text();
-              throw new Error(`Server returned ${checkRes.status}: ${text.substring(0, 100)}`);
-            }
-            
-            const { allowed, error } = await checkRes.json();
-            
-            if (!allowed) {
-              await signOut(auth);
-              setUser(null);
-              setPopup({ 
-                message: error || "Access Denied. Your email is not on the allowed list.", 
-                icon: <ShieldAlert className="text-cyber-red" /> 
-              });
-              return;
-            }
-          } catch (err: any) {
-            console.error("Access check failed:", err);
-            await signOut(auth);
+            await firebaseUser.reload();
+          } catch (e) {
+            console.error("Error reloading user:", e);
+          }
+          
+          if (!firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com') {
+            console.log("Email not verified, redirecting to verify screen");
             setUser(null);
-            setPopup({ message: `Failed to verify access: ${err?.message || 'Server error'}. Check Netlify logs.`, icon: <AlertCircle className="text-cyber-red" /> });
+            setAuthMode('verify');
+            setLoading(false);
+            setLoginLoading(false);
             return;
           }
 
-          let userDoc;
-          try {
-            userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          } catch (e) {
-            handleFirestoreError(e, OperationType.GET, `users/${firebaseUser.uid}`);
-            setPopup({ message: "Database connection failed. Please check your internet or disable adblockers.", icon: <AlertCircle className="text-cyber-red" /> });
-            return;
-          }
-          
-          if (userDoc.exists()) {
-            const userData = userDoc.data() as User;
-            
-            // Ensure old documents get updated with new required fields
-            const updates: any = { status: 'ONLINE', flag: '' };
-            if (!userData.username) updates.username = firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User';
-            if (!userData.role) updates.role = firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user';
-            if (!userData.uid) updates.uid = firebaseUser.uid;
-            
-            setUser({ ...userData, ...updates });
-            
-            // Log login
-            try {
-              await addDoc(collection(db, 'login_logs'), {
-                timestamp: Timestamp.now(),
-                username: updates.username || userData.username,
-                status: 'SUCCESS',
-                device: navigator.userAgent
-              });
-            } catch (e) {
-              handleFirestoreError(e, OperationType.CREATE, 'login_logs');
+          // Set up real-time listener for the current user's document
+          userDocUnsubscribe = onSnapshot(doc(db, 'users', firebaseUser.uid), async (snapshot) => {
+            if (snapshot.exists()) {
+              const userData = snapshot.data();
+              
+              // REAL-TIME DELETE/BAN/KICK CHECK
+              if (userData.flag === 'BANNED' || userData.flag === 'DELETED') {
+                await signOut(auth);
+                setUser(null);
+                setPopup({ 
+                  message: userData.flag === 'BANNED' ? "This account has been banned." : "This account has been deleted.", 
+                  icon: <AlertCircle className="text-cyber-red" /> 
+                });
+                return;
+              }
+
+              if (userData.flag === 'KICKED') {
+                await handleLogout('kicked');
+                return;
+              }
+
+              // CONCURRENT SESSION CHECK
+              if (userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId && userData.lastSeen) {
+                const lastSeen = userData.lastSeen.toDate();
+                const now = new Date();
+                const diffInSeconds = (now.getTime() - lastSeen.getTime()) / 1000;
+                
+                if (diffInSeconds < 120) { // 2 minutes threshold
+                  await signOut(auth);
+                  setUser(null);
+                  setPopup({ 
+                    message: "Account is already online. Please log out from other devices first.", 
+                    icon: <AlertCircle className="text-cyber-red" /> 
+                  });
+                  return;
+                }
+              }
+
+              const newUser: User = {
+                uid: firebaseUser.uid,
+                username: userData.username || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+                role: userData.role || (firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user'),
+                status: 'ONLINE',
+                profilePic: userData.profilePic || firebaseUser.photoURL || undefined,
+                flag: userData.flag,
+                subjects: userData.subjects,
+                sessionId: userData.sessionId
+              };
+              setUser(newUser);
+              
+              // Ensure status is ONLINE and sessionId is set in Firestore
+              if (userData.status !== 'ONLINE' || userData.sessionId !== currentSessionId) {
+                await setDoc(doc(db, 'users', firebaseUser.uid), { 
+                  status: 'ONLINE', 
+                  sessionId: currentSessionId,
+                  lastSeen: serverTimestamp()
+                }, { merge: true });
+              }
+            } else {
+              // Create doc if it doesn't exist
+              const fallbackData = {
+                uid: firebaseUser.uid,
+                username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+                email: firebaseUser.email,
+                role: firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user',
+                status: 'ONLINE',
+                sessionId: currentSessionId,
+                createdAt: serverTimestamp(),
+                lastSeen: serverTimestamp()
+              };
+              await setDoc(doc(db, 'users', firebaseUser.uid), fallbackData);
             }
-            
-            // Update status to ONLINE and add missing fields
-            try {
-              await updateDoc(doc(db, 'users', firebaseUser.uid), updates);
-            } catch (e) {
-              handleFirestoreError(e, OperationType.UPDATE, `users/${firebaseUser.uid}`);
-            }
-          } else {
-            // Create new user if doesn't exist (default role: user)
-            const newUser: any = {
-              uid: firebaseUser.uid,
-              username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-              role: firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user',
-              status: 'ONLINE',
-            };
-            if (firebaseUser.photoURL) newUser.profilePic = firebaseUser.photoURL;
-            try {
-              await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
-            } catch (e) {
-              handleFirestoreError(e, OperationType.CREATE, `users/${firebaseUser.uid}`);
-            }
-            setUser(newUser as User);
-            
-            // Log login for new user
-            try {
-              await addDoc(collection(db, 'login_logs'), {
-                timestamp: Timestamp.now(),
-                username: newUser.username,
-                status: 'SUCCESS_NEW_USER',
-                device: navigator.userAgent
-              });
-            } catch (e) {
-              handleFirestoreError(e, OperationType.CREATE, 'login_logs');
-            }
-          }
+          }, (error) => {
+            handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+          });
+
+          setActivePage('home');
         } else {
+          console.log("No firebase user, setting user to null");
           setUser(null);
         }
+      } catch (error) {
+        console.error("Error in onAuthStateChanged:", error);
+        setUser(null);
       } finally {
         setLoading(false);
         setLoginLoading(false);
       }
+    });
+
+    return () => {
+      authUnsubscribe();
+      if (userDocUnsubscribe) userDocUnsubscribe();
+    };
+  }, []);
+
+  // Handle Online/Offline status
+  useEffect(() => {
+    if (!user) return;
+
+    const setOnline = async () => {
+      try {
+        await setDoc(doc(db, 'users', user.uid), { status: 'ONLINE', lastSeen: serverTimestamp() }, { merge: true });
+      } catch (e) {
+        console.error("Error setting online:", e);
+      }
+    };
+
+    const setOffline = async () => {
+      if (auth.currentUser) {
+        try {
+          await setDoc(doc(db, 'users', user.uid), { status: 'OFFLINE', lastSeen: serverTimestamp() }, { merge: true });
+        } catch (e) {
+          // Only log if it's not a permission error during logout
+          if (!(e instanceof Error && e.message.includes('insufficient permissions'))) {
+            console.error("Error setting offline:", e);
+          }
+        }
+      }
+    };
+
+    setOnline();
+    
+    // Heartbeat to keep lastSeen updated every minute
+    const heartbeatInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        setOnline();
+      }
+    }, 60000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        setOffline();
+      } else {
+        setOnline();
+      }
+    };
+
+    const handleBeforeUnload = () => {
+      setOffline();
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      clearInterval(heartbeatInterval);
+      setOffline();
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [user?.uid]);
+
+  // Live Online Users Listener
+  useEffect(() => {
+    const q = query(collection(db, 'users'), where('status', '==', 'ONLINE'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const users: User[] = [];
+      snapshot.forEach((doc) => {
+        users.push({ uid: doc.id, ...doc.data() } as User);
+      });
+      setOnlineUsers(users);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
     return () => unsubscribe();
@@ -293,18 +442,6 @@ export default function App() {
         setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Announcement)));
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, 'announcements');
-      });
-
-      // Listen for user status (to handle kicks)
-      const unsubUser = onSnapshot(doc(db, 'users', user.uid), (doc) => {
-        if (doc.exists()) {
-          const data = doc.data() as User;
-          if (data.flag === 'KICKED') {
-            handleLogout(true);
-          }
-        }
-      }, (error) => {
-        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
       });
 
       // Inactivity timer
@@ -321,16 +458,33 @@ export default function App() {
       timerRef.current = setInterval(() => {
         setTimeLeft(prev => {
           if (prev <= 1) {
-            handleLogout();
+            handleLogout('inactivity');
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
 
+      // Listen for profile data
+      const unsubFolders = onSnapshot(collection(db, `users/${user.uid}/folders`), (snapshot) => {
+        setMyFolders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+      const unsubFiles = onSnapshot(collection(db, `users/${user.uid}/files`), (snapshot) => {
+        setMyFiles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+      const unsubNotes = onSnapshot(collection(db, `users/${user.uid}/notes`), (snapshot) => {
+        setMyNotes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+      const unsubMembers = onSnapshot(collection(db, `users/${user.uid}/teamMembers`), (snapshot) => {
+        setTeamMembers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+
       return () => {
         unsubAnnouncements();
-        unsubUser();
+        unsubFolders();
+        unsubFiles();
+        unsubNotes();
+        unsubMembers();
         window.removeEventListener('mousedown', resetTimer);
         window.removeEventListener('keydown', resetTimer);
         window.removeEventListener('touchstart', resetTimer);
@@ -339,71 +493,387 @@ export default function App() {
     }
   }, [user]);
 
-  const handleLogin = async () => {
-    console.log("Starting login process...");
-    setLoginLoading(true);
-    
-    // Safety timeout: if login hangs (common in WebViews/mobile apps), reset the button
-    const timeoutId = setTimeout(() => {
-      setLoginLoading(false);
-      setPopup({ 
-        message: "Login timed out. If you are using a mobile app, please use the 'Mobile App Login' button below.", 
-        icon: <AlertCircle className="text-cyber-red" /> 
-      });
-    }, 15000); // 15 seconds timeout
-
+  const handleAddFolder = async () => {
+    if (!newFolderName.trim() || !user) return;
+    setProfileLoading(true);
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      clearTimeout(timeoutId);
-      console.log("signInWithPopup succeeded for:", result.user.email);
-      // Loading state will be handled by onAuthStateChanged
-    } catch (error: any) {
-      clearTimeout(timeoutId);
-      console.error("Login Error details:", error);
-      
-      // Fallback to redirect if popup is blocked or unsupported
-      if (error.code === 'auth/popup-blocked' || error.code === 'auth/web-storage-unsupported') {
-        console.log("Popup blocked or unsupported, falling back to redirect...");
-        try {
-          await signInWithRedirect(auth, googleProvider);
-          return; // Exit early, redirect will handle the rest
-        } catch (redirectError: any) {
-          console.error("Redirect login failed:", redirectError);
-          setPopup({ message: `Redirect login failed: ${redirectError.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+      await addDoc(collection(db, `users/${user.uid}/folders`), {
+        name: newFolderName.trim(),
+        createdAt: serverTimestamp()
+      });
+      setNewFolderName('');
+      setIsFolderModalOpen(false);
+    } catch (e) {
+      console.error(e);
+      setPopup({ message: "Error adding folder", icon: <AlertCircle className="text-cyber-red" /> });
+    }
+    setProfileLoading(false);
+  };
+
+  const handleAddFile = async () => {
+    if (!newFileName.trim() || !user) return;
+    setProfileLoading(true);
+    try {
+      await addDoc(collection(db, `users/${user.uid}/files`), {
+        name: newFileName.trim(),
+        folderId: newFileFolder || null,
+        size: newFileSize || '0 KB',
+        createdAt: serverTimestamp()
+      });
+      setNewFileName('');
+      setNewFileFolder('');
+      setNewFileSize('');
+      setIsFileModalOpen(false);
+    } catch (e) {
+      console.error(e);
+      setPopup({ message: "Error adding file", icon: <AlertCircle className="text-cyber-red" /> });
+    }
+    setProfileLoading(false);
+  };
+
+  const handleAddNote = async () => {
+    if (!newNoteTitle.trim() || !user) return;
+    setProfileLoading(true);
+    try {
+      await addDoc(collection(db, `users/${user.uid}/notes`), {
+        title: newNoteTitle.trim(),
+        content: newNoteContent.trim(),
+        createdAt: serverTimestamp()
+      });
+      setNewNoteTitle('');
+      setNewNoteContent('');
+      setIsNoteModalOpen(false);
+    } catch (e) {
+      console.error(e);
+      setPopup({ message: "Error adding note", icon: <AlertCircle className="text-cyber-red" /> });
+    }
+    setProfileLoading(false);
+  };
+
+  const handleAddMember = async () => {
+    if (!newMemberName.trim() || !user) return;
+    setProfileLoading(true);
+    try {
+      await addDoc(collection(db, `users/${user.uid}/teamMembers`), {
+        name: newMemberName.trim(),
+        role: newMemberRole.trim() || 'Member',
+        createdAt: serverTimestamp()
+      });
+      setNewMemberName('');
+      setNewMemberRole('');
+      setIsMemberModalOpen(false);
+    } catch (e) {
+      console.error(e);
+      setPopup({ message: "Error adding member", icon: <AlertCircle className="text-cyber-red" /> });
+    }
+    setProfileLoading(false);
+  };
+
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        console.log("Diagnostic: Testing Firestore connection...");
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, limit(1));
+        const snap = await getDocs(q);
+        console.log("Diagnostic: Firestore connection successful. User count sample:", snap.size);
+      } catch (error) {
+        console.error("Diagnostic: Firestore connection failed:", error);
+      }
+    };
+    testConnection();
+  }, []);
+
+  const handleLogin = async () => {
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
+
+    if (loginLoading || !trimmedEmail || !trimmedPassword) {
+      if (!trimmedEmail) setPopup({ message: "Please enter your username or email", icon: <AlertCircle className="text-cyber-red" /> });
+      else if (!trimmedPassword) setPopup({ message: "Please enter your password", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+    
+    setLoginLoading(true);
+    console.log("Attempting login for:", trimmedEmail);
+    let loginEmail = trimmedEmail;
+    let actualEmail = trimmedEmail;
+    let usernameFound = true;
+    
+    try {
+      // If it doesn't look like an email, try to find it as a username in Firestore
+      if (!trimmedEmail.includes('@')) {
+        console.log("Input is not an email, searching for username in Firestore:", trimmedEmail);
+        usernameFound = false;
+        const usersRef = collection(db, 'users');
+        
+        // Try lowercase match first
+        const qLower = query(usersRef, where('username_lowercase', '==', trimmedEmail.toLowerCase()));
+        const snapLower = await getDocs(qLower);
+        
+        if (!snapLower.empty) {
+          const userDoc = snapLower.docs[0].data();
+          loginEmail = userDoc.email;
+          actualEmail = userDoc.email;
+          usernameFound = true;
+          console.log("Found email via lowercase username match:", loginEmail);
+        } else {
+          // Try exact match fallback
+          console.log("No lowercase match, trying exact match for username:", trimmedEmail);
+          const qExact = query(usersRef, where('username', '==', trimmedEmail));
+          const snapExact = await getDocs(qExact);
+          
+          if (!snapExact.empty) {
+            const userDoc = snapExact.docs[0].data();
+            loginEmail = userDoc.email;
+            actualEmail = userDoc.email;
+            usernameFound = true;
+            console.log("Found email via exact username match:", loginEmail);
+          } else {
+            // STOP: Do not derive email automatically to prevent duplicate accounts
+            console.log("No username match found in Firestore for:", trimmedEmail);
+            setPopup({ 
+              message: `Username "${trimmedEmail}" not found. If you haven't linked your username yet, please log in with your email address first.`, 
+              icon: <AlertCircle className="text-cyber-red" /> 
+            });
+            setLoginLoading(false);
+            return;
+          }
         }
-      } else if (error.code !== 'auth/popup-closed-by-user') {
-        setPopup({ message: `Login failed: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+      }
+
+      console.log("Calling Firebase Auth signInWithEmailAndPassword with:", loginEmail);
+      const userCredential = await signInWithEmailAndPassword(auth, loginEmail, trimmedPassword);
+      console.log("Firebase Auth success for UID:", userCredential.user.uid);
+      
+      // Check if account is already online
+      const userDocSnap = await getDoc(doc(db, 'users', userCredential.user.uid));
+      if (userDocSnap.exists()) {
+        const userData = userDocSnap.data();
+        // If status is ONLINE and lastSeen is within the last 2 minutes, block login
+        if (userData.status === 'ONLINE' && userData.lastSeen) {
+          const lastSeen = userData.lastSeen.toDate();
+          const now = new Date();
+          const diffInSeconds = (now.getTime() - lastSeen.getTime()) / 1000;
+          
+          if (diffInSeconds < 120) { // 2 minutes threshold
+            await signOut(auth);
+            setPopup({ 
+              message: "Account is already online. Please log out from other devices first.", 
+              icon: <AlertCircle className="text-cyber-red" /> 
+            });
+            setLoginLoading(false);
+            return;
+          }
+        }
+      }
+      
+      // Bypass verification for superadmin
+      if (!userCredential.user.emailVerified && userCredential.user.email !== 'mjdl05010710@gmail.com') {
+        console.log("Email not verified during login, redirecting to verify screen");
+        setVerificationEmail(userCredential.user.email || actualEmail);
+        setAuthMode('verify');
+        setPopup({ message: "Please verify your email before logging in.", icon: <AlertCircle className="text-cyber-red" /> });
+        setLoginLoading(false);
+        return;
+      }
+      
+      try {
+        console.log("Updating user profile in Firestore...");
+        const username = userCredential.user.displayName || userCredential.user.email?.split('@')[0] || 'User';
+        await setDoc(doc(db, 'users', userCredential.user.uid), {
+          status: 'ONLINE',
+          lastLogin: serverTimestamp(),
+          lastSeen: serverTimestamp(),
+          sessionId: currentSessionId,
+          uid: userCredential.user.uid,
+          email: userCredential.user.email,
+          username: username,
+          username_lowercase: username.toLowerCase(),
+        }, { merge: true });
+        console.log("Firestore profile update successful");
+        
+        await addDoc(collection(db, 'activity_logs'), {
+          timestamp: serverTimestamp(),
+          username: username,
+          uid: userCredential.user.uid,
+          action: 'LOGIN'
+        });
+      } catch (e) {
+        console.error("Firestore update failed during login:", e);
+        // We don't block login if activity log fails, but we want to know why
+      }
+      
+      setLoginLoading(false);
+    } catch (error: any) {
+      console.error("Login failed with error:", error);
+      if (error.code === 'auth/invalid-credential') {
+        let message = `Login failed. Please check your credentials.`;
+        if (!trimmedEmail.includes('@')) {
+          if (!usernameFound) {
+            message = `Username "${trimmedEmail}" not found. Please sign up first or check your spelling. If you already have an account, try logging in with your email address once.`;
+          } else {
+            message = `Incorrect password for username "${trimmedEmail}". If you forgot your password, please use the 'Forgot Password' link.`;
+          }
+        } else {
+          message = `Incorrect email or password. Please try again.`;
+        }
+        setPopup({ message, icon: <AlertCircle className="text-cyber-red" /> });
+      } else if (error.code === 'auth/user-not-found') {
+        setPopup({ message: "No account found with this email/username.", icon: <AlertCircle className="text-cyber-red" /> });
+      } else if (error.code === 'auth/wrong-password') {
+        setPopup({ message: "Incorrect password. Please try again.", icon: <AlertCircle className="text-cyber-red" /> });
       } else {
-        console.log("User closed the popup manually.");
+        setPopup({ message: `Login failed: ${error.message || error.code}`, icon: <AlertCircle className="text-cyber-red" /> });
       }
       setLoginLoading(false);
     }
   };
 
-  const handleRedirectLogin = async () => {
-    console.log("Starting redirect login process...");
+  const handleResendVerification = async () => {
+    if (auth.currentUser) {
+      try {
+        await sendEmailVerification(auth.currentUser);
+        setPopup({ message: "Verification email resent! Please check your inbox.", icon: <CheckCircle2 className="text-cyber-green" /> });
+      } catch (e: any) {
+        setPopup({ message: `Failed to resend: ${e.message}`, icon: <AlertCircle className="text-cyber-red" /> });
+      }
+    } else {
+      setPopup({ message: "Please sign in first to resend the verification email.", icon: <AlertCircle className="text-cyber-red" /> });
+      setAuthMode('signin');
+    }
+  };
+
+  const checkVerificationStatus = async () => {
+    if (auth.currentUser) {
+      try {
+        await auth.currentUser.reload();
+        if (auth.currentUser.emailVerified) {
+          setPopup({ message: "Email verified! You are now logged in.", icon: <CheckCircle2 className="text-cyber-green" /> });
+          // The onAuthStateChanged listener will handle the redirection
+        } else {
+          setPopup({ message: "Email still not verified. Please check your inbox and click the link.", icon: <AlertCircle className="text-cyber-red" /> });
+        }
+      } catch (e: any) {
+        setPopup({ message: `Failed to check status: ${e.message}`, icon: <AlertCircle className="text-cyber-red" /> });
+      }
+    }
+  };
+
+  const handleSignup = async () => {
+    if (loginLoading) return;
+    
+    const trimmedEmail = email.trim();
+    const trimmedPassword = password.trim();
+    const trimmedName = name.trim();
+
+    if (!trimmedEmail || !trimmedPassword || !trimmedName) {
+      if (!trimmedName) setPopup({ message: "Please enter your username", icon: <AlertCircle className="text-cyber-red" /> });
+      else if (!trimmedEmail) setPopup({ message: "Please enter your email", icon: <AlertCircle className="text-cyber-red" /> });
+      else if (!trimmedPassword) setPopup({ message: "Please enter your password", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+    
     setLoginLoading(true);
+    console.log("Attempting signup for:", trimmedEmail, "with username:", trimmedName);
     try {
-      await signInWithRedirect(auth, googleProvider);
+      // Check if username is already taken
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('username_lowercase', '==', trimmedName.toLowerCase()));
+      const usernameSnap = await getDocs(q);
+      
+      if (!usernameSnap.empty) {
+        setPopup({ message: "This username is already taken. Please choose another one.", icon: <AlertCircle className="text-cyber-red" /> });
+        setLoginLoading(false);
+        return;
+      }
+
+      const signupEmail = trimmedEmail.includes('@') ? trimmedEmail : `${trimmedEmail}@gmail.com`;
+      const userCredential = await createUserWithEmailAndPassword(auth, signupEmail, trimmedPassword);
+      const firebaseUser = userCredential.user;
+      console.log("Firebase Auth signup success:", firebaseUser.uid);
+      
+      await updateProfile(firebaseUser, { displayName: trimmedName });
+      
+      console.log("Creating user doc in Firestore...");
+      await setDoc(doc(db, 'users', firebaseUser.uid), {
+        uid: firebaseUser.uid,
+        username: trimmedName,
+        username_lowercase: trimmedName.toLowerCase(),
+        email: firebaseUser.email,
+        role: firebaseUser.email === 'mjdl05010710@gmail.com' ? 'superadmin' : 'user',
+        status: 'OFFLINE',
+        createdAt: serverTimestamp()
+      });
+      console.log("Firestore user doc created successfully");
+
+      console.log("Sending email verification...");
+      await sendEmailVerification(firebaseUser);
+      await signOut(auth);
+      
+      setVerificationEmail(trimmedEmail);
+      setAuthMode('verify');
+      setPopup({ message: "Account successfully created! Please verify your email.", icon: <CheckCircle2 className="text-cyber-green" /> });
     } catch (error: any) {
-      console.error("Redirect login failed:", error);
-      setPopup({ message: `Redirect login failed: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+      console.error("Signup failed:", error);
+      if (error.code === 'auth/email-already-in-use') {
+        setPopup({ message: "An account with this email already exists. Please sign in instead.", icon: <AlertCircle className="text-cyber-red" /> });
+      } else if (error.code === 'auth/invalid-email') {
+        setPopup({ message: "Invalid email address.", icon: <AlertCircle className="text-cyber-red" /> });
+      } else if (error.code === 'auth/weak-password') {
+        setPopup({ message: "Password is too weak. Please use at least 6 characters.", icon: <AlertCircle className="text-cyber-red" /> });
+      } else {
+        setPopup({ message: `Signup failed: ${error.message || error.code}`, icon: <AlertCircle className="text-cyber-red" /> });
+      }
+    } finally {
       setLoginLoading(false);
     }
   };
 
-  const handleLogout = async (kicked: boolean = false) => {
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setPopup({ message: "Please enter your email address first to reset your password.", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+    
+    setLoginLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setPopup({ message: "Password reset email sent! Please check your inbox.", icon: <CheckCircle2 className="text-cyber-blue" /> });
+    } catch (error: any) {
+      console.error("Password reset error:", error);
+      setPopup({ message: `Failed to send reset email: ${error.message || 'Unknown error'}`, icon: <AlertCircle className="text-cyber-red" /> });
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async (reason?: 'kicked' | 'inactivity') => {
     if (user && auth.currentUser) {
       try {
-        await updateDoc(doc(db, 'users', user.uid), { status: 'OFFLINE' });
+        await setDoc(doc(db, 'users', user.uid), {
+          status: 'OFFLINE',
+          lastLogout: serverTimestamp()
+        }, { merge: true });
+        
+        await addDoc(collection(db, 'activity_logs'), {
+          timestamp: serverTimestamp(),
+          username: user.username,
+          uid: user.uid,
+          action: 'LOGOUT',
+          details: reason ? `Reason: ${reason}` : 'User manual logout'
+        });
       } catch (e) {
         console.error("Error updating status on logout:", e);
       }
+
       await signOut(auth);
       setUser(null);
       setActivePage('home');
-      if (kicked) {
+      if (reason === 'kicked') {
         setPopup({ message: "You were kicked by admin", icon: <AlertCircle className="text-cyber-red" /> });
+      } else if (reason === 'inactivity') {
+        setPopup({ message: "Logged out due to inactivity", icon: <Clock className="text-cyber-blue" /> });
       }
     }
   };
@@ -441,6 +911,43 @@ export default function App() {
       } catch (e) {
         console.error("Sheets Log Error:", e);
       }
+    }
+  };
+
+  const openReviewer = async (subject: string, type: 'MIDTERM' | 'FINAL') => {
+    setCurrentSubject(subject);
+    setCurrentTopic(type);
+    setActivePage('viewer');
+    setViewerImages([]);
+    setCurrentSlide(0);
+    
+    await logActivity('OPEN_REVIEWER', `${subject}_${type}`);
+
+    const folderId = PDF_LINKS[`${subject.toUpperCase()}_${type}`];
+    if (!folderId) {
+      setPopup({ message: "Reviewer not available yet.", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/drive/images/${folderId}`);
+      const data = await response.json();
+      if (data.images && data.images.length > 0) {
+        setViewerImages(data.images);
+      } else if (data.images && data.images.length === 0) {
+        setPopup({ message: "No images found in this folder. Ensure the folder contains images and is shared publicly.", icon: <AlertCircle className="text-cyber-red" /> });
+        setViewerImages([]);
+      } else if (data.error === "Google Drive API key is not configured") {
+        setPopup({ 
+          message: "Google Drive API Key is missing. Please go to 'Settings' in AI Studio and add 'GOOGLE_DRIVE_API_KEY' to your secrets.", 
+          icon: <ShieldAlert className="text-cyber-red" /> 
+        });
+      } else {
+        setPopup({ message: "Failed to load images. Check folder permissions.", icon: <AlertCircle className="text-cyber-red" /> });
+      }
+    } catch (error) {
+      console.error("Error fetching images:", error);
+      setPopup({ message: "An error occurred while fetching images.", icon: <AlertCircle className="text-cyber-red" /> });
     }
   };
 
@@ -573,36 +1080,131 @@ export default function App() {
     }, 2000);
   };
 
-  const loadAdminData = async () => {
-    if (user?.role === 'admin' || user?.role === 'superadmin') {
-      try {
-        const usersSnap = await getDocs(collection(db, 'users'));
-        setAllUsers(usersSnap.docs.map(doc => doc.data() as User));
-        
-        const logsSnap = await getDocs(query(collection(db, 'activity_logs'), orderBy('timestamp', 'desc'), limit(50)));
-        setActivityLogs(logsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityLog)));
-      } catch (e) {
-        handleFirestoreError(e, OperationType.LIST, 'admin_data');
+  useEffect(() => {
+    let unsubUsers: (() => void) | null = null;
+    let unsubLogs: (() => void) | null = null;
+
+    if (activePage === 'admin' || activePage === 'manage-admins') {
+      if (user?.role === 'admin' || user?.role === 'superadmin') {
+        const q = query(collection(db, 'users'));
+        unsubUsers = onSnapshot(q, (snapshot) => {
+          const users = snapshot.docs
+            .map(doc => doc.data() as User)
+            .filter(u => u.flag !== 'DELETED');
+          setAllUsers(users);
+        }, (error) => {
+          handleFirestoreError(error, OperationType.LIST, 'users');
+        });
+
+        const logsQ = query(collection(db, 'activity_logs'), orderBy('timestamp', 'desc'), limit(50));
+        unsubLogs = onSnapshot(logsQ, (snapshot) => {
+          setActivityLogs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityLog)));
+        }, (error) => {
+          handleFirestoreError(error, OperationType.LIST, 'activity_logs');
+        });
       }
     }
-  };
 
-  useEffect(() => {
-    if (activePage === 'admin') {
-      loadAdminData();
-    }
-  }, [activePage]);
+    return () => {
+      if (unsubUsers) unsubUsers();
+      if (unsubLogs) unsubLogs();
+    };
+  }, [activePage, user?.role]);
 
   const kickUser = async (targetUid: string) => {
     if (user?.role === 'superadmin') {
       try {
-        await updateDoc(doc(db, 'users', targetUid), { flag: 'KICKED', status: 'OFFLINE' });
+        await setDoc(doc(db, 'users', targetUid), { flag: 'KICKED', status: 'OFFLINE' }, { merge: true });
         setPopup({ message: "User kicked", icon: <CheckCircle2 className="text-cyber-green" /> });
-        loadAdminData();
       } catch (e) {
         handleFirestoreError(e, OperationType.UPDATE, `users/${targetUid}`);
       }
     }
+  };
+
+  const deleteUser = async (targetUid: string) => {
+    if (user?.role === 'superadmin' && targetUid !== user.uid) {
+      setConfirmModal({
+        message: "Are you sure you want to PERMANENTLY disable this user's account? This action cannot be undone.",
+        onConfirm: async () => {
+          try {
+            // Mark as deleted in Firestore instead of full delete to prevent recreation by onAuthStateChanged
+            await setDoc(doc(db, 'users', targetUid), { 
+              flag: 'DELETED', 
+              status: 'OFFLINE',
+              deletedAt: serverTimestamp(),
+              deletedBy: user.uid
+            }, { merge: true });
+            
+            await addDoc(collection(db, 'activity_logs'), {
+              timestamp: serverTimestamp(),
+              username: user.username,
+              uid: user.uid,
+              action: 'DELETE_USER',
+              details: `Deleted user UID: ${targetUid}`
+            });
+            
+            setPopup({ message: "User account disabled and data marked for deletion.", icon: <CheckCircle2 className="text-cyber-green" /> });
+          } catch (e) {
+            handleFirestoreError(e, OperationType.UPDATE, `users/${targetUid}`);
+          }
+        }
+      });
+    }
+  };
+
+  const updateUserRole = async (targetUid: string, newRole: 'user' | 'admin' | 'superadmin') => {
+    if (user?.role === 'superadmin') {
+      try {
+        await setDoc(doc(db, 'users', targetUid), { role: newRole }, { merge: true });
+        setPopup({ message: `Role updated to ${newRole}`, icon: <CheckCircle2 className="text-cyber-green" /> });
+        
+        await addDoc(collection(db, 'activity_logs'), {
+          timestamp: serverTimestamp(),
+          username: user.username,
+          uid: user.uid,
+          action: 'UPDATE_ROLE',
+          details: `Updated user UID: ${targetUid} to role: ${newRole}`
+        });
+      } catch (e) {
+        handleFirestoreError(e, OperationType.UPDATE, `users/${targetUid}`);
+      }
+    }
+  };
+
+  const updateUsername = async (newName: string) => {
+    if (!user || !newName.trim()) return;
+    setProfileLoading(true);
+    try {
+      const trimmedName = newName.trim();
+      
+      // Check if username is taken
+      const usersRef = collection(db, 'users');
+      const q = query(usersRef, where('username_lowercase', '==', trimmedName.toLowerCase()));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty && snap.docs[0].id !== user.uid) {
+        setPopup({ message: "Username already taken", icon: <AlertCircle className="text-cyber-red" /> });
+        setProfileLoading(false);
+        return;
+      }
+
+      await setDoc(doc(db, 'users', user.uid), {
+        username: trimmedName,
+        username_lowercase: trimmedName.toLowerCase()
+      }, { merge: true });
+
+      if (auth.currentUser) {
+        await updateProfile(auth.currentUser, { displayName: trimmedName });
+      }
+
+      setUser({ ...user, username: trimmedName });
+      setPopup({ message: "Username updated successfully", icon: <CheckCircle2 className="text-cyber-green" /> });
+    } catch (e) {
+      console.error(e);
+      setPopup({ message: "Error updating username", icon: <AlertCircle className="text-cyber-red" /> });
+    }
+    setProfileLoading(false);
   };
 
   const formatTime = (seconds: number) => {
@@ -614,30 +1216,151 @@ export default function App() {
   if (loading) return <LoadingScreen />;
 
   if (!user) {
+    if (authMode === 'verify') {
+      return (
+        <div className="flex items-center justify-center min-h-screen">
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass p-10 rounded-3xl text-center w-full max-w-md mx-4"
+          >
+            <h1 className="text-4xl font-black cyber-text mb-8">Verify Email</h1>
+            <div className="mb-8">
+              <CheckCircle2 className="w-16 h-16 text-cyber-blue mx-auto mb-4" />
+              <p className="text-white/80 text-lg">
+                We have sent you a verification email to <span className="font-bold text-cyber-blue">{verificationEmail}</span>. Please verify it and log in.
+              </p>
+            </div>
+            <div className="space-y-4">
+              <button 
+                onClick={checkVerificationStatus} 
+                className="cyber-button w-full py-4 text-lg"
+              >
+                Check Verification Status
+              </button>
+              <button 
+                onClick={handleResendVerification} 
+                className="w-full py-2 text-sm text-white/50 hover:text-white transition-colors"
+              >
+                Resend Verification Email
+              </button>
+              <button 
+                onClick={() => setAuthMode('signin')} 
+                className="w-full py-2 text-sm text-cyber-blue hover:underline"
+              >
+                Back to Login
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      );
+    }
+
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen bg-black overflow-hidden relative">
+        {/* Animated Background Elements */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyber-blue/10 rounded-full blur-[120px] animate-pulse" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyber-purple/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
+        </div>
+
         <motion.div 
-          initial={{ opacity: 0, y: -20 }}
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="glass p-10 rounded-3xl text-center w-full max-w-md mx-4"
+          className="glass p-8 sm:p-10 rounded-3xl text-center w-full max-w-md mx-4 relative z-10"
         >
           <h1 className="text-4xl font-black cyber-text mb-8">Justine & Friends</h1>
-          <p className="text-white/60 mb-8">Welcome to the futuristic learning portal. Please sign in to continue.</p>
-          <button 
-            onClick={handleLogin} 
-            disabled={loginLoading}
-            className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loginLoading ? "Logging in..." : "Login with Google"}
-          </button>
           
-          <button 
-            onClick={handleRedirectLogin} 
-            disabled={loginLoading}
-            className="mt-6 text-sm text-white/50 hover:text-white underline transition-colors"
-          >
-            Using a mobile app? Click here to login
-          </button>
+          <div className="flex gap-4 mb-8">
+            <button 
+              onClick={() => setAuthMode('signin')}
+              className={cn(
+                "flex-1 py-3 rounded-xl font-bold transition-all border",
+                authMode === 'signin' 
+                  ? "bg-cyber-blue/20 border-cyber-blue text-cyber-blue shadow-[0_0_15px_rgba(0,186,255,0.3)]" 
+                  : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
+              )}
+            >
+              Sign In
+            </button>
+            <button 
+              onClick={() => setAuthMode('signup')}
+              className={cn(
+                "flex-1 py-3 rounded-xl font-bold transition-all border",
+                authMode === 'signup' 
+                  ? "bg-cyber-blue/20 border-cyber-blue text-cyber-blue shadow-[0_0_15px_rgba(0,186,255,0.3)]" 
+                  : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
+              )}
+            >
+              Sign Up
+            </button>
+          </div>
+
+          <div className="space-y-4 mb-8 text-left">
+            {authMode === 'signup' && (
+              <div>
+                <label className="block text-sm font-medium text-white/70 mb-1">Username</label>
+                <div className="relative">
+                  <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                  <input 
+                    type="text" 
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
+                    placeholder="Enter username"
+                  />
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-white/70 mb-1">
+                {authMode === 'signin' ? 'Username or Email' : 'Email Address'}
+              </label>
+              <div className="relative">
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                <input 
+                  type="text"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
+                  placeholder={authMode === 'signin' ? 'Enter username or email' : 'Enter email'}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-white/70 mb-1">Password</label>
+              <div className="relative">
+                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                <input 
+                  type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
+                  placeholder="Enter password"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <button 
+              onClick={authMode === 'signin' ? handleLogin : handleSignup}
+              disabled={loginLoading}
+              className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loginLoading ? "Processing..." : (authMode === 'signin' ? "Sign In" : "Sign Up")}
+            </button>
+            
+            {authMode === 'signin' && (
+              <button 
+                onClick={handleForgotPassword} 
+                disabled={loginLoading || !email}
+                className="w-full py-2 text-sm text-white/50 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Forgot Password?
+              </button>
+            )}
+          </div>
         </motion.div>
       </div>
     );
@@ -673,7 +1396,7 @@ export default function App() {
             <span className="animate-pulse text-cyber-blue">⏳</span>
             {formatTime(timeLeft)}
           </div>
-          <button onClick={() => handleLogout(false)} className="p-2 bg-cyber-red/20 hover:bg-cyber-red/40 text-cyber-red rounded-lg transition-colors">
+          <button onClick={() => handleLogout()} className="p-2 bg-cyber-red/20 hover:bg-cyber-red/40 text-cyber-red rounded-lg transition-colors">
             <LogOut size={18} />
           </button>
         </div>
@@ -749,6 +1472,15 @@ export default function App() {
                 collapsed={sidebarCollapsed} 
                 onClick={() => setActivePage('admin')} 
               />
+              {user.role === 'superadmin' && (
+                <SidebarItem 
+                  icon={<ShieldCheck size={20} />} 
+                  label="Manage Admins" 
+                  active={activePage === 'manage-admins'} 
+                  collapsed={sidebarCollapsed} 
+                  onClick={() => setActivePage('manage-admins')} 
+                />
+              )}
             </>
           )}
         </nav>
@@ -817,6 +1549,221 @@ export default function App() {
               </motion.div>
             )}
 
+            {activePage === 'profile' && (
+              <motion.div 
+                key="profile"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-8"
+              >
+                {/* Profile Header */}
+                <div className="glass p-8 rounded-3xl flex flex-col md:flex-row items-center gap-8 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-cyber-blue/5 blur-[100px] -mr-32 -mt-32" />
+                  
+                  <div className="relative">
+                    <div className="w-32 h-32 rounded-full border-4 border-cyber-blue/30 p-1 bg-black/40">
+                      <img 
+                        src={user.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} 
+                        alt="Profile" 
+                        className="w-full h-full rounded-full object-cover"
+                      />
+                    </div>
+                    <div className="absolute bottom-2 right-2 w-6 h-6 bg-cyber-green rounded-full border-4 border-black shadow-[0_0_10px_#00ffc8]" />
+                  </div>
+
+                  <div className="flex-1 text-center md:text-left space-y-4">
+                    <div>
+                      <h1 className="text-4xl font-black cyber-text leading-none">{user.username}</h1>
+                      <p className="text-white/40 mt-1 font-mono text-sm">{auth.currentUser?.email}</p>
+                    </div>
+                    
+                    <div className="flex flex-wrap justify-center md:justify-start gap-3">
+                      <div className={cn(
+                        "px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-widest flex items-center gap-2",
+                        user.role === 'superadmin' ? "bg-yellow-400/20 text-yellow-400 border border-yellow-400/30" :
+                        user.role === 'admin' ? "bg-cyber-blue/20 text-cyber-blue border border-cyber-blue/30" : 
+                        "bg-white/5 text-white/60 border border-white/10"
+                      )}>
+                        {user.role === 'superadmin' ? <Crown size={14} /> : <UserIcon size={14} />}
+                        {user.role}
+                      </div>
+                      <div className="px-4 py-1.5 rounded-xl text-xs font-bold bg-cyber-green/10 text-cyber-green border border-cyber-green/20 flex items-center gap-2">
+                        <div className="w-2 h-2 bg-cyber-green rounded-full animate-pulse" />
+                        Online
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-2 w-full md:w-auto">
+                    <button 
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}?user=${user.username}`);
+                        setPopup({ message: "Profile link copied to clipboard!", icon: <CheckCircle2 className="text-cyber-green" /> });
+                      }}
+                      className="bg-white/5 hover:bg-white/10 border border-white/10 px-6 py-3 rounded-2xl text-sm font-bold transition-all flex items-center justify-center gap-2"
+                    >
+                      <Plus size={18} /> Copy Profile Link
+                    </button>
+                    <button className="cyber-button px-6 py-3 text-sm flex items-center justify-center gap-2">
+                      <Settings size={18} /> Edit Profile
+                    </button>
+                  </div>
+                </div>
+
+                {/* My Files Section */}
+                <div className="glass p-8 rounded-3xl space-y-6">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                    <div className="flex items-center gap-3">
+                      <Folder className="text-cyber-blue" size={24} />
+                      <h2 className="text-xl font-bold font-orbitron">My Files</h2>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setIsFolderModalOpen(true)} className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-xl text-sm font-bold transition-colors flex items-center gap-2">
+                        <Plus size={16} /> New Folder
+                      </button>
+                      <button onClick={() => setIsFileModalOpen(true)} className="cyber-button px-4 py-2 text-sm flex items-center gap-2">
+                        <Plus size={16} /> Add File
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {profileLoading ? (
+                    <div className="flex justify-center py-8"><Loader2 className="animate-spin text-cyber-blue" size={32} /></div>
+                  ) : (
+                    <div className="space-y-6">
+                      {/* Folders */}
+                      {myFolders.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                          {myFolders.map(folder => (
+                            <div key={folder.id} className="bg-white/5 p-4 rounded-2xl border border-white/10 flex items-center gap-3 hover:bg-white/10 transition-colors cursor-pointer">
+                              <Folder className="text-yellow-400" size={24} />
+                              <span className="font-medium truncate">{folder.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* Files */}
+                      {myFiles.length > 0 ? (
+                        <div className="space-y-2">
+                          {myFiles.map(file => (
+                            <div key={file.id} className="bg-white/5 p-4 rounded-2xl border border-white/10 flex items-center justify-between hover:bg-white/10 transition-colors">
+                              <div className="flex items-center gap-3">
+                                <File className="text-blue-400" size={20} />
+                                <div>
+                                  <p className="font-medium">{file.name}</p>
+                                  <p className="text-xs text-white/40">{file.size} • {file.folderId ? 'In Folder' : 'Root'}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        myFolders.length === 0 && <p className="text-center text-white/40 py-8">No files or folders yet.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Account Settings */}
+                <div className="glass p-8 rounded-3xl space-y-6">
+                  <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+                    <Settings className="text-cyber-green" size={24} />
+                    <h2 className="text-xl font-bold font-orbitron">Account Settings</h2>
+                  </div>
+                  
+                  <div className="max-w-md space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase tracking-widest text-white/40">Change Username</label>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          placeholder="New username"
+                          defaultValue={user.username}
+                          id="new-username-input"
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus:outline-none focus:border-cyber-green transition-colors"
+                        />
+                        <button 
+                          onClick={() => {
+                            const input = document.getElementById('new-username-input') as HTMLInputElement;
+                            updateUsername(input.value);
+                          }}
+                          className="bg-cyber-green/20 text-cyber-green hover:bg-cyber-green/30 px-6 py-2 rounded-xl font-bold transition-all border border-cyber-green/30"
+                        >
+                          Update
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-white/30 italic">Changing your username will update how you appear to others and how you log in.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* My Notes Section */}
+                <div className="glass p-8 rounded-3xl space-y-6">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                    <div className="flex items-center gap-3">
+                      <FileText className="text-purple-400" size={24} />
+                      <h2 className="text-xl font-bold font-orbitron">My Notes</h2>
+                    </div>
+                    <button onClick={() => setIsNoteModalOpen(true)} className="cyber-button px-4 py-2 text-sm flex items-center gap-2">
+                      <Plus size={16} /> New Note
+                    </button>
+                  </div>
+                  
+                  {profileLoading ? (
+                    <div className="flex justify-center py-8"><Loader2 className="animate-spin text-cyber-blue" size={32} /></div>
+                  ) : myNotes.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {myNotes.map(note => (
+                        <div key={note.id} className="bg-white/5 p-6 rounded-2xl border border-white/10 hover:bg-white/10 transition-colors">
+                          <h3 className="font-bold text-lg mb-2 truncate">{note.title}</h3>
+                          <p className="text-sm text-white/60 line-clamp-3">{note.content || 'No content'}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-center text-white/40 py-8">No notes yet.</p>
+                  )}
+                </div>
+
+                {/* Team Members Section */}
+                <div className="glass p-8 rounded-3xl space-y-6">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                    <div className="flex items-center gap-3">
+                      <Users className="text-green-400" size={24} />
+                      <h2 className="text-xl font-bold font-orbitron">Team Members</h2>
+                    </div>
+                    <button onClick={() => setIsMemberModalOpen(true)} className="cyber-button px-4 py-2 text-sm flex items-center gap-2">
+                      <Plus size={16} /> Add Member
+                    </button>
+                  </div>
+                  
+                  {profileLoading ? (
+                    <div className="flex justify-center py-8"><Loader2 className="animate-spin text-cyber-blue" size={32} /></div>
+                  ) : teamMembers.length > 0 ? (
+                    <div className="space-y-2">
+                      {teamMembers.map(member => (
+                        <div key={member.id} className="bg-white/5 p-4 rounded-2xl border border-white/10 flex items-center justify-between hover:bg-white/10 transition-colors">
+                          <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center font-bold text-lg">
+                              {member.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-bold">{member.name}</p>
+                              <p className="text-xs text-white/40">{member.role}</p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-center text-white/40 py-8">No team members yet.</p>
+                  )}
+                </div>
+              </motion.div>
+            )}
+
             {subjects.some(s => s.id === activePage) && (
               <motion.div 
                 key={activePage}
@@ -831,37 +1778,58 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                  {Array.from({ length: 8 }, (_, i) => i + 1).map(num => (
-                    <div key={num} className="glass p-6 rounded-2xl space-y-4 hover:bg-white/10 transition-colors group">
-                      <div className="text-3xl opacity-40 group-hover:opacity-100 transition-opacity">📚</div>
-                      <h3 className="font-bold text-lg">{TOPIC_NAMES[activePage.toUpperCase()]?.[num-1] || `Topic ${num}`}</h3>
-                      <div className="grid grid-cols-2 gap-2">
-                        <button 
-                          onClick={() => openTopic(activePage, `TOPIC${num}`)}
-                          className="bg-white/10 hover:bg-white/20 py-2 rounded-lg text-xs font-bold"
-                        >
-                          Open
-                        </button>
-                        <button 
-                          onClick={() => startQuiz(activePage, `TOPIC${num}`)}
-                          className="cyber-button py-2 rounded-lg text-xs font-bold"
-                        >
-                          Quiz
-                        </button>
+                  {Array.from({ length: 8 }, (_, i) => i + 1).map(num => {
+                    const topicName = TOPIC_NAMES[activePage.toUpperCase()]?.[num-1] || `Topic ${num}`;
+                    const subject = subjects.find(s => s.id === activePage);
+                    
+                    return (
+                      <div key={num} className="glass rounded-2xl overflow-hidden hover:bg-white/10 transition-colors group flex flex-col">
+                        <div className="h-24 w-full flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
+                          <div className="text-4xl opacity-50 group-hover:opacity-100 transition-opacity transform group-hover:scale-110 duration-300">
+                            {subject?.icon || <FileText />}
+                          </div>
+                        </div>
+                        <div className="p-6 space-y-4 flex-1 flex flex-col justify-between">
+                          <h3 className="font-bold text-lg leading-tight">{topicName}</h3>
+                          <div className="grid grid-cols-2 gap-2 mt-auto">
+                            <button 
+                              onClick={() => openTopic(activePage, `TOPIC${num}`)}
+                              className="bg-white/10 hover:bg-white/20 py-2 rounded-lg text-xs font-bold transition-colors"
+                            >
+                              Open
+                            </button>
+                            <button 
+                              onClick={() => startQuiz(activePage, `TOPIC${num}`)}
+                              className="cyber-button py-2 rounded-lg text-xs font-bold"
+                            >
+                              Quiz
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   
                   <div className="glass p-6 rounded-2xl space-y-4 border-dashed border-cyber-blue/30">
                     <div className="text-3xl">📖</div>
                     <h3 className="font-bold text-lg">Midterm Reviewer</h3>
-                    <button className="cyber-button w-full py-2 text-sm">Open PDF</button>
+                    <button 
+                      onClick={() => openReviewer(activePage, 'MIDTERM')}
+                      className="cyber-button w-full py-2 text-sm"
+                    >
+                      Open Reviewer
+                    </button>
                   </div>
                   
                   <div className="glass p-6 rounded-2xl space-y-4 border-dashed border-cyber-green/30">
                     <div className="text-3xl">🎯</div>
                     <h3 className="font-bold text-lg">Final Reviewer</h3>
-                    <button className="cyber-button w-full py-2 text-sm">Open PDF</button>
+                    <button 
+                      onClick={() => openReviewer(activePage, 'FINAL')}
+                      className="cyber-button w-full py-2 text-sm"
+                    >
+                      Open Reviewer
+                    </button>
                   </div>
                 </div>
               </motion.div>
@@ -993,7 +1961,7 @@ export default function App() {
                   ) : (
                     <div className="flex flex-col items-center justify-center py-20 space-y-4">
                       <Loader2 className="animate-spin text-cyber-blue" size={40} />
-                      <p className="text-white/40 animate-pulse">Gemini is preparing your quiz...</p>
+                      <p className="text-white/40 animate-pulse">Preparing your assessment...</p>
                     </div>
                   )}
                 </div>
@@ -1013,13 +1981,12 @@ export default function App() {
                   <p className="text-white/40">System management and monitoring</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="glass p-8 rounded-3xl space-y-6">
                     <div className="flex items-center justify-between">
                       <h2 className="text-xl font-bold font-orbitron flex items-center gap-2">
                         <UserIcon size={20} className="text-cyber-blue" /> User Management
                       </h2>
-                      <button onClick={loadAdminData} className="p-2 hover:bg-white/10 rounded-lg"><Plus size={20} /></button>
                     </div>
                     <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
                       {allUsers.map(u => (
@@ -1037,16 +2004,52 @@ export default function App() {
                           <div className="flex items-center gap-2">
                             <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded uppercase">{u.role}</span>
                             {user.role === 'superadmin' && u.uid !== user.uid && (
-                              <button 
-                                onClick={() => kickUser(u.uid)}
-                                className="p-2 text-cyber-red hover:bg-cyber-red/20 rounded-lg transition-colors"
-                              >
-                                <ShieldAlert size={18} />
-                              </button>
+                              <div className="flex gap-1">
+                                <button 
+                                  onClick={() => kickUser(u.uid)}
+                                  title="Kick User"
+                                  className="p-2 text-cyber-red hover:bg-cyber-red/20 rounded-lg transition-colors"
+                                >
+                                  <ShieldAlert size={18} />
+                                </button>
+                                <button 
+                                  onClick={() => deleteUser(u.uid)}
+                                  title="Delete User"
+                                  className="p-2 text-cyber-red hover:bg-cyber-red/20 rounded-lg transition-colors"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="glass p-8 rounded-3xl space-y-6">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-xl font-bold font-orbitron flex items-center gap-2">
+                        <Users size={20} className="text-cyber-blue" /> Live Online ({onlineUsers.length})
+                      </h2>
+                    </div>
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                      {onlineUsers.length === 0 ? (
+                        <p className="text-center text-white/20 py-10">No users online</p>
+                      ) : (
+                        onlineUsers.map(u => (
+                          <div key={u.uid} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl border border-white/5">
+                            <div className="relative">
+                              <img src={u.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} className="w-8 h-8 rounded-full" />
+                              <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-cyber-green rounded-full border-2 border-black" />
+                            </div>
+                            <div>
+                              <p className="font-bold text-xs">{u.username}</p>
+                              <p className="text-[8px] text-white/40 uppercase tracking-wider">{u.role}</p>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
 
@@ -1063,6 +2066,61 @@ export default function App() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {activePage === 'manage-admins' && user.role === 'superadmin' && (
+              <motion.div 
+                key="manage-admins"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-8"
+              >
+                <div className="text-center space-y-2">
+                  <h1 className="text-4xl font-black cyber-text">Manage Admins</h1>
+                  <p className="text-white/40">Promote or demote users to administrative roles</p>
+                </div>
+
+                <div className="glass p-8 rounded-3xl space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xl font-bold font-orbitron flex items-center gap-2">
+                      <ShieldCheck size={20} className="text-cyber-blue" /> Administrative Roles
+                    </h2>
+                  </div>
+                  <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
+                    {allUsers.map(u => (
+                      <div key={u.uid} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
+                        <div className="flex items-center gap-3">
+                          <img src={u.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} className="w-10 h-10 rounded-full" />
+                          <div>
+                            <p className="font-bold text-sm">{u.username}</p>
+                            <p className="text-[10px] text-white/40">{u.email}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2 bg-black/20 p-1 rounded-xl border border-white/5">
+                            {(['user', 'admin', 'superadmin'] as const).map(role => (
+                              <button
+                                key={role}
+                                onClick={() => updateUserRole(u.uid, role)}
+                                disabled={u.uid === user.uid}
+                                className={cn(
+                                  "px-3 py-1 rounded-lg text-[10px] font-bold uppercase transition-all",
+                                  u.role === role 
+                                    ? "bg-cyber-blue/20 text-cyber-blue border border-cyber-blue/30 shadow-[0_0_10px_rgba(0,186,255,0.2)]" 
+                                    : "text-white/30 hover:text-white hover:bg-white/5"
+                                )}
+                              >
+                                {role}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </motion.div>
@@ -1110,6 +2168,82 @@ export default function App() {
               <ChevronRight size={32} />
             </button>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modals */}
+      <AnimatePresence>
+        {isFolderModalOpen && (
+          <div className="fixed inset-0 z-[1000] bg-black/80 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="glass p-6 rounded-3xl w-full max-w-md">
+              <h3 className="text-xl font-bold mb-4">New Folder</h3>
+              <input type="text" value={newFolderName} onChange={e => setNewFolderName(e.target.value)} placeholder="Folder Name" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white mb-6 focus:border-cyber-blue outline-none" autoFocus />
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setIsFolderModalOpen(false)} className="px-4 py-2 rounded-xl hover:bg-white/10 transition-colors">Cancel</button>
+                <button onClick={handleAddFolder} disabled={profileLoading || !newFolderName.trim()} className="cyber-button px-6 py-2 disabled:opacity-50">Create</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isFileModalOpen && (
+          <div className="fixed inset-0 z-[1000] bg-black/80 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="glass p-6 rounded-3xl w-full max-w-md">
+              <h3 className="text-xl font-bold mb-4">Add File</h3>
+              <div className="space-y-4 mb-6">
+                <input type="text" value={newFileName} onChange={e => setNewFileName(e.target.value)} placeholder="File Name (e.g., document.pdf)" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" autoFocus />
+                <select value={newFileFolder} onChange={e => setNewFileFolder(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none appearance-none">
+                  <option value="">Root (No Folder)</option>
+                  {myFolders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+                <input type="text" value={newFileSize} onChange={e => setNewFileSize(e.target.value)} placeholder="Size (e.g., 2.5 MB)" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setIsFileModalOpen(false)} className="px-4 py-2 rounded-xl hover:bg-white/10 transition-colors">Cancel</button>
+                <button onClick={handleAddFile} disabled={profileLoading || !newFileName.trim()} className="cyber-button px-6 py-2 disabled:opacity-50">Add</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isNoteModalOpen && (
+          <div className="fixed inset-0 z-[1000] bg-black/80 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="glass p-6 rounded-3xl w-full max-w-2xl">
+              <h3 className="text-xl font-bold mb-4">New Note</h3>
+              <div className="space-y-4 mb-6">
+                <input type="text" value={newNoteTitle} onChange={e => setNewNoteTitle(e.target.value)} placeholder="Note Title" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none font-bold text-lg" autoFocus />
+                <textarea value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} placeholder="Write your note here..." className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none min-h-[200px] resize-y" />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setIsNoteModalOpen(false)} className="px-4 py-2 rounded-xl hover:bg-white/10 transition-colors">Cancel</button>
+                <button onClick={handleAddNote} disabled={profileLoading || !newNoteTitle.trim()} className="cyber-button px-6 py-2 disabled:opacity-50">Save</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {isMemberModalOpen && (
+          <div className="fixed inset-0 z-[1000] bg-black/80 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="glass p-6 rounded-3xl w-full max-w-md">
+              <h3 className="text-xl font-bold mb-4">Add Team Member</h3>
+              <div className="space-y-4 mb-6">
+                <input type="text" value={newMemberName} onChange={e => setNewMemberName(e.target.value)} placeholder="Member Name" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" autoFocus />
+                <input type="text" value={newMemberRole} onChange={e => setNewMemberRole(e.target.value)} placeholder="Role (e.g., Developer, Designer)" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" />
+              </div>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setIsMemberModalOpen(false)} className="px-4 py-2 rounded-xl hover:bg-white/10 transition-colors">Cancel</button>
+                <button onClick={handleAddMember} disabled={profileLoading || !newMemberName.trim()} className="cyber-button px-6 py-2 disabled:opacity-50">Add</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {confirmModal && (
+          <ConfirmModal 
+            message={confirmModal.message} 
+            onConfirm={confirmModal.onConfirm} 
+            onCancel={() => setConfirmModal(null)} 
+          />
         )}
       </AnimatePresence>
     </div>
