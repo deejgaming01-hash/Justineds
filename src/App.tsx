@@ -163,6 +163,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -592,6 +593,7 @@ export default function App() {
     }
     
     setLoginLoading(true);
+    setIsProcessing(true);
     console.log("Attempting login for:", trimmedEmail);
     let loginEmail = trimmedEmail;
     let actualEmail = trimmedEmail;
@@ -683,8 +685,10 @@ export default function App() {
       
       setLoginLoading(false);
       isLoggingIn.current = false;
+      setIsProcessing(false);
     } catch (error: any) {
       isLoggingIn.current = false;
+      setIsProcessing(false);
       console.error("Login failed with error:", error);
       if (error.code === 'auth/invalid-credential') {
         let message = `Login failed. Please check your credentials.`;
@@ -755,6 +759,7 @@ export default function App() {
     
     setLoginLoading(true);
     isLoggingIn.current = true;
+    setIsProcessing(true);
     console.log("Attempting signup for:", trimmedEmail, "with username:", trimmedName);
     try {
       // Check if username is already taken
@@ -808,6 +813,7 @@ export default function App() {
     } finally {
       setLoginLoading(false);
       isLoggingIn.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -830,6 +836,7 @@ export default function App() {
   };
 
   const handleLogout = async (reason?: 'kicked' | 'inactivity') => {
+    setIsProcessing(true);
     if (user && auth.currentUser) {
       try {
         await setDoc(doc(db, 'users', user.uid), {
@@ -857,6 +864,7 @@ export default function App() {
         setPopup({ message: "Logged out due to inactivity", icon: <Clock className="text-cyber-blue" /> });
       }
     }
+    setIsProcessing(false);
   };
 
   const logActivity = async (action: string, details?: string) => {
@@ -1195,6 +1203,7 @@ export default function App() {
   };
 
   if (loading) return <LoadingScreen />;
+  if (isProcessing) return <LoadingScreen message="Processing..." />;
 
   if (!user) {
     if (authMode === 'verify') {
@@ -1327,9 +1336,16 @@ export default function App() {
             <button 
               onClick={authMode === 'signin' ? handleLogin : handleSignup}
               disabled={loginLoading}
-              className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              {loginLoading ? "Processing..." : (authMode === 'signin' ? "Sign In" : "Sign Up")}
+              {loginLoading ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  Processing...
+                </>
+              ) : (
+                authMode === 'signin' ? "Sign In" : "Sign Up"
+              )}
             </button>
             
             {authMode === 'signin' && (
