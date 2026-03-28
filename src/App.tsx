@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  auth, db, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile, applyActionCode
+  auth, db, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile, applyActionCode, EmailAuthProvider, reauthenticateWithCredential, updatePassword as firebaseUpdatePassword
 } from './firebase';
 import { 
   doc, 
@@ -403,24 +403,24 @@ export default function App() {
                 // Continue login instead of logging out
               }
 
-              // CONCURRENT SESSION CHECK: Disabled temporarily for debugging.
-              // console.log("Concurrent session check:", {
-              //   isLoggingIn: isLoggingIn.current,
-              //   userDataStatus: userData.status,
-              //   userDataSessionId: userData.sessionId,
-              //   currentSessionId: currentSessionId,
-              //   checkResult: !isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId
-              // });
-              // if (!isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId) {
-              //   console.log("Concurrent session detected. Current:", currentSessionId, "In Firestore:", userData.sessionId);
-              //   await signOut(auth);
-              //   setUser(null);
-              //   setPopup({ 
-              //     message: "You have been logged out because your account is active in another session.", 
-              //     icon: <AlertCircle className="text-cyber-red" /> 
-              //   });
-              //   return;
-              // }
+              // CONCURRENT SESSION CHECK
+              console.log("Concurrent session check:", {
+                isLoggingIn: isLoggingIn.current,
+                userDataStatus: userData.status,
+                userDataSessionId: userData.sessionId,
+                currentSessionId: currentSessionId,
+                checkResult: !isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId
+              });
+              if (!isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId) {
+                console.log("Concurrent session detected. Current:", currentSessionId, "In Firestore:", userData.sessionId);
+                await signOut(auth);
+                setUser(null);
+                setPopup({ 
+                  message: "You have been logged out because your account is active in another session.", 
+                  icon: <AlertCircle className="text-cyber-red" /> 
+                });
+                return;
+              }
 
               // Ensure status is ONLINE and sessionId is set in Firestore
               if (!isLoggingOut.current && (userData.status !== 'ONLINE' || userData.sessionId !== currentSessionId)) {
@@ -526,23 +526,36 @@ export default function App() {
       setOffline();
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setOnline();
+      } else {
+        // Set offline when backgrounded on mobile/desktop
+        setOffline(); 
+      }
+    };
+
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       clearInterval(heartbeatInterval);
       setOffline();
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [user?.uid]);
 
   // Live Online Users Listener
   useEffect(() => {
     const q = query(collection(db, 'users'), where('status', '==', 'ONLINE'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    
+    let lastSnapshot: any[] = [];
+
+    const updateOnlineUsers = (snapshotData: any[]) => {
       const now = Date.now();
       const users: User[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
+      snapshotData.forEach((data) => {
         let status = data.status || 'OFFLINE';
         
         // Stale session check: if ONLINE but lastSeen is older than 3 minutes, treat as OFFLINE
@@ -558,15 +571,28 @@ export default function App() {
         }
         
         if (status === 'ONLINE') {
-          users.push({ uid: doc.id, ...data, status } as User);
+          users.push({ ...data, status } as User);
         }
       });
       setOnlineUsers(users);
+    };
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      lastSnapshot = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() }));
+      updateOnlineUsers(lastSnapshot);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
-    return () => unsubscribe();
+    // Local interval to re-filter stale sessions every 30 seconds
+    const interval = setInterval(() => {
+      updateOnlineUsers(lastSnapshot);
+    }, 30000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -1451,6 +1477,38 @@ export default function App() {
     setProfileLoading(false);
   };
 
+  const handleChangePassword = async (currentPass: string, newPass: string) => {
+    if (!auth.currentUser || !auth.currentUser.email) return;
+    
+    if (newPass.length < 8) {
+      setPopup({ message: "New password must be at least 8 characters long", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+
+    setProfileLoading(true);
+    try {
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPass);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+      await firebaseUpdatePassword(auth.currentUser, newPass);
+      
+      setPopup({ message: "Password updated successfully", icon: <CheckCircle2 className="text-cyber-green" /> });
+      
+      // Clear inputs
+      const currentInput = document.getElementById('current-password-input') as HTMLInputElement;
+      const newInput = document.getElementById('new-password-input') as HTMLInputElement;
+      if (currentInput) currentInput.value = '';
+      if (newInput) newInput.value = '';
+
+    } catch (e: any) {
+      console.error("Error changing password:", e);
+      let msg = "Failed to change password";
+      if (e.code === 'auth/wrong-password') msg = "Incorrect current password";
+      setPopup({ message: msg, icon: <AlertCircle className="text-cyber-red" /> });
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
   if (loading) return <LoadingScreen />;
   if (isProcessing) return <LoadingScreen message="Processing..." />;
 
@@ -1462,8 +1520,8 @@ export default function App() {
         </AnimatePresence>
         {/* Background Glows */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none gpu-accelerated">
-          <div className="absolute -top-24 -left-24 w-96 h-96 bg-cyber-blue/20 blur-[120px] rounded-full animate-pulse" />
-          <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-cyber-green/20 blur-[120px] rounded-full animate-pulse" style={{ animationDelay: '1s' }} />
+          <div className="absolute -top-24 -left-24 w-96 h-96 bg-cyber-blue/20 blur-3xl rounded-full opacity-50" />
+          <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-cyber-green/20 blur-3xl rounded-full opacity-50" />
         </div>
 
         <motion.div 
@@ -1554,8 +1612,8 @@ export default function App() {
         </AnimatePresence>
         {/* Animated Background Elements */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none gpu-accelerated">
-          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyber-blue/10 rounded-full blur-[120px] animate-pulse" />
-          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyber-purple/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyber-blue/10 rounded-full blur-3xl opacity-50" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyber-purple/10 rounded-full blur-3xl opacity-50" />
         </div>
 
         <motion.div 
@@ -1857,7 +1915,7 @@ export default function App() {
               >
                 {/* Profile Header */}
                 <div className="glass p-8 rounded-3xl flex flex-col md:flex-row items-center gap-8 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-64 h-64 bg-cyber-blue/5 blur-[100px] -mr-32 -mt-32" />
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-cyber-blue/5 blur-3xl -mr-32 -mt-32 opacity-50" />
                   
                   <div className="relative group">
                     <div className="w-32 h-32 rounded-full border-4 border-cyber-blue/30 p-1 bg-black/40 overflow-hidden">
@@ -2015,6 +2073,38 @@ export default function App() {
                         </button>
                       </div>
                       <p className="text-[10px] text-white/30 italic">Changing your username will update how you appear to others and how you log in.</p>
+                    </div>
+
+                    <div className="h-px bg-white/5 my-4" />
+
+                    <div className="space-y-4">
+                      <label className="text-xs font-bold uppercase tracking-widest text-white/40">Change Password</label>
+                      <div className="space-y-3">
+                        <input 
+                          type="password" 
+                          placeholder="Current Password"
+                          id="current-password-input"
+                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus:outline-none focus:border-cyber-green transition-colors"
+                        />
+                        <div className="flex gap-2">
+                          <input 
+                            type="password" 
+                            placeholder="New Password (min. 8 chars)"
+                            id="new-password-input"
+                            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus:outline-none focus:border-cyber-green transition-colors"
+                          />
+                          <button 
+                            onClick={() => {
+                              const currentInput = document.getElementById('current-password-input') as HTMLInputElement;
+                              const newInput = document.getElementById('new-password-input') as HTMLInputElement;
+                              handleChangePassword(currentInput.value, newInput.value);
+                            }}
+                            className="bg-cyber-green/20 text-cyber-green hover:bg-cyber-green/30 px-6 py-2 rounded-xl font-bold transition-all border border-cyber-green/30"
+                          >
+                            Update
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2565,9 +2655,9 @@ export default function App() {
                 {profileLoading && (
                   <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
                     <motion.div 
-                      className="bg-cyber-blue h-full"
-                      initial={{ width: 0 }}
-                      animate={{ width: "100%" }}
+                      className="bg-cyber-blue h-full origin-left"
+                      initial={{ scaleX: 0 }}
+                      animate={{ scaleX: 1 }}
                       transition={{ duration: 2, ease: "linear" }}
                     />
                   </div>

@@ -32,37 +32,30 @@
       rgba(0,0,0,0.75),
       rgba(0,0,0,0.6)
     );
-    background-size: 400% 400%;
-    animation: bgMove 20s linear infinite;
-    will-change: background-position;
+    /* Removed expensive background-position animation */
   }
-}
-
-@keyframes bgMove {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
 }
 
 @layer utilities {
   .glass {
-    @apply bg-white/5 backdrop-blur-2xl border border-white/20 shadow-2xl;
-    /* Force GPU acceleration */
+    /* Reduced blur for better mobile performance */
+    @apply bg-black/40 md:bg-white/5 backdrop-blur-sm md:backdrop-blur-md border border-white/10 shadow-xl;
     transform: translateZ(0);
   }
   
   .gpu-accelerated {
     transform: translateZ(0);
-    will-change: transform, opacity;
+    /* Removed will-change to prevent memory exhaustion on large containers */
   }
 
   .cyber-text {
-    @apply font-orbitron tracking-widest bg-gradient-to-r from-cyber-blue to-cyber-green bg-clip-text text-transparent drop-shadow-[0_0_10px_rgba(79,209,255,0.5)];
-    will-change: filter;
+    @apply font-orbitron tracking-widest bg-gradient-to-r from-cyber-blue to-cyber-green bg-clip-text text-transparent;
+    /* Removed expensive drop-shadow and will-change: filter */
   }
 
   .cyber-button {
-    @apply bg-gradient-to-br from-cyber-blue to-cyber-green text-black font-bold px-4 py-2 rounded-lg transition-all duration-300 hover:scale-105 hover:shadow-[0_0_15px_rgba(79,209,255,0.7)] active:scale-95;
+    @apply bg-gradient-to-br from-cyber-blue to-cyber-green text-black font-bold px-4 py-2 rounded-lg transition-transform duration-300 hover:scale-105 active:scale-95;
+    /* Removed expensive hover box-shadow */
     will-change: transform;
   }
 }
