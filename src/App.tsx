@@ -2260,11 +2260,20 @@ export default function App() {
                 <div className="relative glass rounded-3xl overflow-hidden aspect-video group">
                   {viewerImages.length > 0 ? (
                     <>
+                      {/* Preload adjacent images for instant transition */}
+                      <div className="hidden">
+                        {viewerImages.slice(Math.max(0, currentSlide - 1), currentSlide + 3).map((src, idx) => (
+                          <img key={idx} src={src} decoding="async" loading="eager" />
+                        ))}
+                      </div>
+                      
                       <img 
                         src={viewerImages[currentSlide]} 
                         alt="Topic Slide" 
                         className="w-full h-full object-contain cursor-zoom-in"
                         onClick={() => setFullscreen(true)}
+                        decoding="async"
+                        fetchPriority="high"
                       />
                       
                       <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 px-4 py-1 rounded-full text-sm font-mono">
@@ -2577,6 +2586,8 @@ export default function App() {
             <img 
               src={viewerImages[currentSlide]} 
               className="max-w-full max-h-full object-contain"
+              decoding="async"
+              fetchPriority="high"
             />
 
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/10 px-6 py-2 rounded-full font-mono">
