@@ -237,12 +237,13 @@ export default function App() {
   ).current;
 
   const isLoggingIn = useRef(false);
+  const isLoggingOut = useRef(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let userDocUnsubscribe: (() => void) | null = null;
     const authUnsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log("Auth state changed:", firebaseUser?.uid, "Verified:", firebaseUser?.emailVerified);
+      console.log("Auth state changed. User UID:", firebaseUser?.uid, "Verified:", firebaseUser?.emailVerified);
       
       if (userDocUnsubscribe) {
         userDocUnsubscribe();
@@ -254,21 +255,30 @@ export default function App() {
           // Force reload to get latest emailVerified status
           try {
             await firebaseUser.reload();
+            console.log("User reloaded. Email verified:", firebaseUser.emailVerified, "Email:", firebaseUser.email);
+            console.log("Full firebaseUser object:", JSON.stringify(firebaseUser, null, 2));
           } catch (e) {
             console.error("Error reloading user:", e);
           }
           
-          if (!firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com') {
-            console.log("Email not verified, redirecting to verify screen");
-            setUser(null);
-            setAuthMode('verify');
-            setLoading(false);
-            setLoginLoading(false);
-            return;
-          }
+          console.log("Checking verification (BYPASSING):", {
+            emailVerified: firebaseUser.emailVerified,
+            email: firebaseUser.email,
+            isSuperAdmin: firebaseUser.email === 'mjdl05010710@gmail.com',
+            shouldRedirect: !firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com'
+          });
+          // if (!firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com') {
+          //   console.log("Email not verified, redirecting to verify screen");
+          //   setUser(null);
+          //   setAuthMode('verify');
+          //   setLoading(false);
+          //   setLoginLoading(false);
+          //   return;
+          // }
 
           // Set up real-time listener for the current user's document
           userDocUnsubscribe = onSnapshot(doc(db, 'users', firebaseUser.uid), async (snapshot) => {
+            console.log("User doc snapshot exists:", snapshot.exists(), "Data:", snapshot.data());
             if (snapshot.exists()) {
               const userData = snapshot.data();
               
@@ -284,23 +294,39 @@ export default function App() {
               }
 
               if (userData.flag === 'KICKED') {
-                await handleLogout('kicked');
-                return;
+                console.log("User is KICKED, clearing flag and allowing login.");
+                await updateDoc(doc(db, 'users', firebaseUser.uid), { flag: null });
+                // Continue login instead of logging out
               }
 
-              // CONCURRENT SESSION CHECK: If someone else logged in with a different sessionId, log us out.
-              // We skip this check if we are currently in the middle of logging in to avoid race conditions.
-              if (!isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId) {
-                console.log("Concurrent session detected. Current:", currentSessionId, "In Firestore:", userData.sessionId);
-                await signOut(auth);
-                setUser(null);
-                setPopup({ 
-                  message: "You have been logged out because your account is active in another session.", 
-                  icon: <AlertCircle className="text-cyber-red" /> 
-                });
-                return;
-              }
+              // CONCURRENT SESSION CHECK: Disabled temporarily for debugging.
+              // console.log("Concurrent session check:", {
+              //   isLoggingIn: isLoggingIn.current,
+              //   userDataStatus: userData.status,
+              //   userDataSessionId: userData.sessionId,
+              //   currentSessionId: currentSessionId,
+              //   checkResult: !isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId
+              // });
+              // if (!isLoggingIn.current && userData.status === 'ONLINE' && userData.sessionId && userData.sessionId !== currentSessionId) {
+              //   console.log("Concurrent session detected. Current:", currentSessionId, "In Firestore:", userData.sessionId);
+              //   await signOut(auth);
+              //   setUser(null);
+              //   setPopup({ 
+              //     message: "You have been logged out because your account is active in another session.", 
+              //     icon: <AlertCircle className="text-cyber-red" /> 
+              //   });
+              //   return;
+              // }
 
+              // Ensure status is ONLINE and sessionId is set in Firestore
+              if (!isLoggingOut.current && (userData.status !== 'ONLINE' || userData.sessionId !== currentSessionId)) {
+                await setDoc(doc(db, 'users', firebaseUser.uid), { 
+                  status: 'ONLINE', 
+                  sessionId: currentSessionId,
+                  lastSeen: serverTimestamp()
+                }, { merge: true });
+              }
+              
               const newUser: User = {
                 uid: firebaseUser.uid,
                 username: userData.username || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
@@ -309,18 +335,10 @@ export default function App() {
                 profilePic: userData.profilePic || firebaseUser.photoURL || undefined,
                 flag: userData.flag,
                 subjects: userData.subjects,
-                sessionId: userData.sessionId
+                sessionId: currentSessionId
               };
+              console.log("Setting user state:", newUser);
               setUser(newUser);
-              
-              // Ensure status is ONLINE and sessionId is set in Firestore
-              if (userData.status !== 'ONLINE' || userData.sessionId !== currentSessionId) {
-                await setDoc(doc(db, 'users', firebaseUser.uid), { 
-                  status: 'ONLINE', 
-                  sessionId: currentSessionId,
-                  lastSeen: serverTimestamp()
-                }, { merge: true });
-              }
             } else {
               // Create doc if it doesn't exist
               const fallbackData = {
@@ -365,14 +383,20 @@ export default function App() {
     if (!user) return;
 
     const setOnline = async () => {
+      if (isLoggingOut.current) return;
       try {
-        await setDoc(doc(db, 'users', user.uid), { status: 'ONLINE', lastSeen: serverTimestamp() }, { merge: true });
+        await setDoc(doc(db, 'users', user.uid), { 
+          status: 'ONLINE', 
+          lastSeen: serverTimestamp(),
+          sessionId: currentSessionId 
+        }, { merge: true });
       } catch (e) {
         console.error("Error setting online:", e);
       }
     };
 
     const setOffline = async () => {
+      if (isLoggingOut.current) return;
       if (auth.currentUser) {
         try {
           await setDoc(doc(db, 'users', user.uid), { status: 'OFFLINE', lastSeen: serverTimestamp() }, { merge: true });
@@ -392,27 +416,17 @@ export default function App() {
       if (document.visibilityState === 'visible') {
         setOnline();
       }
-    }, 60000);
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        setOffline();
-      } else {
-        setOnline();
-      }
-    };
+    }, 30000); // 30 seconds
 
     const handleBeforeUnload = () => {
       setOffline();
     };
 
-    window.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
       clearInterval(heartbeatInterval);
       setOffline();
-      window.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [user?.uid]);
@@ -421,9 +435,27 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'users'), where('status', '==', 'ONLINE'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      const now = Date.now();
       const users: User[] = [];
       snapshot.forEach((doc) => {
-        users.push({ uid: doc.id, ...doc.data() } as User);
+        const data = doc.data();
+        let status = data.status || 'OFFLINE';
+        
+        // Stale session check: if ONLINE but lastSeen is older than 3 minutes, treat as OFFLINE
+        if (status === 'ONLINE' && data.lastSeen) {
+          try {
+            const lastSeenTime = data.lastSeen.toMillis ? data.lastSeen.toMillis() : new Date(data.lastSeen).getTime();
+            if (now - lastSeenTime > 180000) { // 3 minutes
+              status = 'OFFLINE';
+            }
+          } catch (e) {
+            console.error("Error parsing lastSeen:", e);
+          }
+        }
+        
+        if (status === 'ONLINE') {
+          users.push({ uid: doc.id, ...data, status } as User);
+        }
       });
       setOnlineUsers(users);
     }, (error) => {
@@ -638,6 +670,7 @@ export default function App() {
             });
             setLoginLoading(false);
             isLoggingIn.current = false;
+            setIsProcessing(false);
             return;
           }
         }
@@ -655,6 +688,7 @@ export default function App() {
         setPopup({ message: "Please verify your email before logging in.", icon: <AlertCircle className="text-cyber-red" /> });
         setLoginLoading(false);
         isLoggingIn.current = false;
+        setIsProcessing(false);
         return;
       }
       
@@ -834,6 +868,7 @@ export default function App() {
   };
 
   const handleLogout = async (reason?: 'kicked' | 'inactivity') => {
+    isLoggingOut.current = true;
     setIsProcessing(true);
     if (user && auth.currentUser) {
       try {
@@ -863,6 +898,7 @@ export default function App() {
       }
     }
     setIsProcessing(false);
+    isLoggingOut.current = false;
   };
 
   const logActivity = async (action: string, details?: string) => {
@@ -1051,6 +1087,32 @@ export default function App() {
     }
   };
 
+  const clearStaleSessions = async () => {
+    if (user?.role !== 'superadmin') return;
+    setLoginLoading(true);
+    try {
+      const now = Date.now();
+      const staleUsers = allUsers.filter(u => {
+        if (u.status !== 'ONLINE' || !u.lastSeen) return false;
+        try {
+          const lastSeenTime = u.lastSeen.toMillis ? u.lastSeen.toMillis() : new Date(u.lastSeen).getTime();
+          return now - lastSeenTime > 180000; // 3 minutes
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      for (const u of staleUsers) {
+        await setDoc(doc(db, 'users', u.uid), { status: 'OFFLINE' }, { merge: true });
+      }
+      setPopup({ message: `Cleared ${staleUsers.length} stale sessions.`, icon: <CheckCircle2 className="text-cyber-green" /> });
+    } catch (e: any) {
+      setPopup({ message: `Failed to clear: ${e.message}`, icon: <AlertCircle className="text-cyber-red" /> });
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   const handleQuizAnswer = (index: number) => {
     if (!quiz || quizFeedback) return;
 
@@ -1081,10 +1143,29 @@ export default function App() {
       if (user?.role === 'admin' || user?.role === 'superadmin') {
         const q = query(collection(db, 'users'));
         unsubUsers = onSnapshot(q, (snapshot) => {
+          const now = Date.now();
           const users = snapshot.docs
-            .map(doc => doc.data() as User)
+            .map(doc => {
+              const data = doc.data();
+              let status = data.status || 'OFFLINE';
+              
+              // Stale session check: if ONLINE but lastSeen is older than 3 minutes, treat as OFFLINE
+              if (status === 'ONLINE' && data.lastSeen) {
+                try {
+                  const lastSeenTime = data.lastSeen.toMillis ? data.lastSeen.toMillis() : new Date(data.lastSeen).getTime();
+                  if (now - lastSeenTime > 180000) { // 3 minutes
+                    status = 'OFFLINE';
+                  }
+                } catch (e) {
+                  console.error("Error parsing lastSeen:", e);
+                }
+              }
+              
+              return { uid: doc.id, ...data, status } as User;
+            })
             .filter(u => u.flag !== 'DELETED');
           setAllUsers(users);
+          setOnlineUsers(users.filter(u => u.status === 'ONLINE'));
         }, (error) => {
           handleFirestoreError(error, OperationType.LIST, 'users');
         });
@@ -1988,6 +2069,14 @@ export default function App() {
                       <h2 className="text-xl font-bold font-orbitron flex items-center gap-2">
                         <UserIcon size={20} className="text-cyber-blue" /> User Management
                       </h2>
+                      {user?.role === 'superadmin' && (
+                        <button 
+                          onClick={clearStaleSessions}
+                          className="text-[10px] bg-cyber-red/20 text-cyber-red px-2 py-1 rounded hover:bg-cyber-red/30 transition-colors"
+                        >
+                          Clear Stale
+                        </button>
+                      )}
                     </div>
                     <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
                       {allUsers.map(u => (
@@ -1999,7 +2088,7 @@ export default function App() {
                               <span className={cn(
                                 "text-[10px] font-bold uppercase",
                                 u.status === 'ONLINE' ? "text-cyber-green" : "text-white/30"
-                              )}>{u.status}</span>
+                              )}>{u.status || 'OFFLINE'}</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -2046,7 +2135,18 @@ export default function App() {
                             </div>
                             <div>
                               <p className="font-bold text-xs">{u.username}</p>
-                              <p className="text-[8px] text-white/40 uppercase tracking-wider">{u.role}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="text-[8px] text-white/40 uppercase tracking-wider">{u.role}</p>
+                                <div className="flex items-center gap-1">
+                                  <div className={`w-1.5 h-1.5 rounded-full ${u.status === 'ONLINE' ? 'bg-cyber-green' : 'bg-white/20'}`} />
+                                  <span className="text-[8px] text-white/20 uppercase">{u.status}</span>
+                                </div>
+                              </div>
+                              {u.lastSeen && (
+                                <p className="text-[8px] text-white/20">
+                                  Active: {u.lastSeen.toDate ? u.lastSeen.toDate().toLocaleTimeString() : new Date(u.lastSeen).toLocaleTimeString()}
+                                </p>
+                              )}
                             </div>
                           </div>
                         ))

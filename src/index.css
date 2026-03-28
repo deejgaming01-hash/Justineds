@@ -12,11 +12,15 @@
 
 @layer base {
   body {
-    @apply bg-[#050505] text-white font-poppins overflow-hidden h-screen;
+    @apply bg-[#050505] text-white font-poppins min-h-screen;
     background-image: url("https://i.pinimg.com/736x/9b/f2/52/9bf2529f6c9dd705c7bc7d1761a5d0f5.jpg");
     background-size: cover;
     background-position: center;
     background-attachment: fixed;
+  }
+
+  button {
+    @apply touch-manipulation select-none;
   }
 
   body::before {
