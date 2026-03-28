@@ -350,6 +350,7 @@ export default function App() {
       } finally {
         setLoading(false);
         setLoginLoading(false);
+        setIsProcessing(false);
       }
     });
 
@@ -691,17 +692,7 @@ export default function App() {
       setIsProcessing(false);
       console.error("Login failed with error:", error);
       if (error.code === 'auth/invalid-credential') {
-        let message = `Login failed. Please check your credentials.`;
-        if (!trimmedEmail.includes('@')) {
-          if (!usernameFound) {
-            message = `Username "${trimmedEmail}" not found. Please sign up first or check your spelling. If you already have an account, try logging in with your email address once.`;
-          } else {
-            message = `Incorrect password for username "${trimmedEmail}". If you forgot your password, please use the 'Forgot Password' link.`;
-          }
-        } else {
-          message = `Incorrect email or password. Please try again.`;
-        }
-        setPopup({ message, icon: <AlertCircle className="text-cyber-red" /> });
+        setPopup({ message: "Invalid email or password. Please check your credentials and try again.", icon: <AlertCircle className="text-cyber-red" /> });
       } else if (error.code === 'auth/user-not-found') {
         setPopup({ message: "No account found with this email/username.", icon: <AlertCircle className="text-cyber-red" /> });
       } else if (error.code === 'auth/wrong-password') {
@@ -823,6 +814,13 @@ export default function App() {
       return;
     }
     
+    // Basic email format check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setPopup({ message: "Please enter a valid email address.", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+    
     setLoginLoading(true);
     try {
       await sendPasswordResetEmail(auth, email);
@@ -904,6 +902,12 @@ export default function App() {
   };
 
   const openReviewer = async (subject: string, type: 'MIDTERM' | 'FINAL') => {
+    if (!user) return;
+    if (user.role !== 'admin' && user.role !== 'superadmin') {
+      setPopup({ message: "Access Denied: Only admins can view reviewers.", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+
     setCurrentSubject(subject);
     setCurrentTopic(type);
     setActivePage('viewer');
