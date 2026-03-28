@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  auth, db, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile
+  auth, db, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail, sendEmailVerification, updateProfile, applyActionCode
 } from './firebase';
 import { 
   doc, 
@@ -44,6 +44,7 @@ import {
   Search,
   Plus,
   Trash2,
+  Download,
   ShieldAlert,
   Lock,
   Mail,
@@ -52,13 +53,19 @@ import {
   Users,
   File,
   ShieldCheck,
-  Clock
+  Clock,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenAI } from "@google/genai";
 import { cn } from './lib/utils';
+import { supabase, reinitializeSupabase, getSignedUrl } from './supabase';
+import { UserAvatar } from './components/UserAvatar';
+import { FileUpload } from './components/FileUpload';
 import { User, Announcement, ActivityLog, LoginLog, QuizQuestion, UserRole } from './types';
 import { FOLDER_MAP, PDF_LINKS, TOPIC_NAMES } from './constants';
+
+const STORAGE_BUCKET = 'Jollideej';
 
 // --- Components ---
 
@@ -113,35 +120,35 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-const LoadingScreen = ({ message = "Processing..." }: { message?: string }) => (
-  <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/40 backdrop-blur-md">
+const LoadingScreen = React.memo(({ message = "Processing..." }: { message?: string }) => (
+  <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/40 backdrop-blur-md gpu-accelerated">
     <div className="w-16 h-16 border-4 border-white/20 border-t-cyber-blue rounded-full animate-spin" />
     <p className="mt-4 text-cyber-blue font-orbitron animate-pulse">{message}</p>
   </div>
-);
+));
 
-const Popup = ({ message, icon, onClose }: { message: string, icon: React.ReactNode, onClose: () => void }) => (
+const Popup = React.memo(({ message, icon, onClose }: { message: string, icon: React.ReactNode, onClose: () => void }) => (
   <motion.div 
     initial={{ opacity: 0, scale: 0.8 }}
     animate={{ opacity: 1, scale: 1 }}
     exit={{ opacity: 0, scale: 0.8 }}
-    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-md gpu-accelerated"
     onClick={onClose}
   >
-    <div className="glass p-8 rounded-2xl text-center max-w-sm w-full mx-4" onClick={e => e.stopPropagation()}>
-      <div className="text-4xl mb-4 flex justify-center">{icon}</div>
-      <p className="text-lg mb-6">{message}</p>
-      <button onClick={onClose} className="cyber-button w-full">OK</button>
+    <div className="glass p-10 rounded-3xl text-center max-w-sm w-full mx-4 border-cyber-blue/30 shadow-[0_0_50px_rgba(79,209,255,0.2)]" onClick={e => e.stopPropagation()}>
+      <div className="text-5xl mb-6 flex justify-center drop-shadow-[0_0_15px_rgba(79,209,255,0.5)]">{icon}</div>
+      <p className="text-xl mb-8 font-medium leading-relaxed text-center">{message}</p>
+      <button onClick={onClose} className="cyber-button w-full py-4 text-lg uppercase tracking-widest">Understood</button>
     </div>
   </motion.div>
-);
+));
 
-const ConfirmModal = ({ message, onConfirm, onCancel }: { message: string, onConfirm: () => void, onCancel: () => void }) => (
+const ConfirmModal = React.memo(({ message, onConfirm, onCancel }: { message: string, onConfirm: () => void, onCancel: () => void }) => (
   <motion.div 
     initial={{ opacity: 0, scale: 0.8 }}
     animate={{ opacity: 1, scale: 1 }}
     exit={{ opacity: 0, scale: 0.8 }}
-    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm gpu-accelerated"
     onClick={onCancel}
   >
     <div className="glass p-8 rounded-3xl text-center max-w-sm w-full mx-4 space-y-6" onClick={e => e.stopPropagation()}>
@@ -153,7 +160,52 @@ const ConfirmModal = ({ message, onConfirm, onCancel }: { message: string, onCon
       </div>
     </div>
   </motion.div>
-);
+));
+
+const InactivityTimer = React.memo(({ onLogout }: { onLogout: (reason: 'inactivity') => void }) => {
+  const [timeLeft, setTimeLeft] = useState(600); // 10 minutes
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  useEffect(() => {
+    const resetTimer = () => {
+      setTimeLeft(600);
+    };
+
+    window.addEventListener('mousedown', resetTimer);
+    window.addEventListener('keydown', resetTimer);
+    window.addEventListener('touchstart', resetTimer);
+
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          onLogout('inactivity');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      window.removeEventListener('mousedown', resetTimer);
+      window.removeEventListener('keydown', resetTimer);
+      window.removeEventListener('touchstart', resetTimer);
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [onLogout]);
+
+  return (
+    <div className="bg-black/40 px-3 py-1 rounded-lg text-sm font-mono flex items-center gap-2 gpu-accelerated">
+      <span className="animate-pulse text-cyber-blue">⏳</span>
+      {formatTime(timeLeft)}
+    </div>
+  );
+});
 
 // --- Main App ---
 
@@ -170,6 +222,7 @@ export default function App() {
   const [verificationEmail, setVerificationEmail] = useState('');
   const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'verify'>('signin');
   const [activePage, setActivePage] = useState('home');
+  const [isVerifySuccess, setIsVerifySuccess] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [popup, setPopup] = useState<{ message: string, icon: React.ReactNode } | null>(null);
@@ -183,8 +236,6 @@ export default function App() {
   const [quizIndex, setQuizIndex] = useState(0);
   const [quizScore, setQuizScore] = useState(0);
   const [quizFeedback, setQuizFeedback] = useState<string | null>(null);
-  const [timeLeft, setTimeLeft] = useState(600); // 10 minutes
-  const [isInteracting, setIsInteracting] = useState(false);
 
   // Admin states
   const [allUsers, setAllUsers] = useState<User[]>([]);
@@ -209,10 +260,63 @@ export default function App() {
   const [newFileName, setNewFileName] = useState('');
   const [newFileFolder, setNewFileFolder] = useState('');
   const [newFileSize, setNewFileSize] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteContent, setNewNoteContent] = useState('');
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('');
+  const [supabaseClient, setSupabaseClient] = useState(supabase);
+
+  useEffect(() => {
+    const fetchSupabaseConfig = async () => {
+      try {
+        const res = await fetch('/api/config/supabase');
+        if (res.ok) {
+          const config = await res.json();
+          if (config.url && config.anonKey) {
+            const newClient = reinitializeSupabase(config.url, config.anonKey);
+            if (newClient) {
+              setSupabaseClient(newClient);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching Supabase config:", error);
+      }
+    };
+    
+    if (!supabase) {
+      fetchSupabaseConfig();
+    }
+  }, []);
+
+  useEffect(() => {
+    // Check if we are on the verify success page via URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    const mode = urlParams.get('mode');
+    const oobCode = urlParams.get('oobCode');
+
+    if (mode === 'verifyEmail' && oobCode) {
+      setIsProcessing(true);
+      applyActionCode(auth, oobCode)
+        .then(() => {
+          setIsVerifySuccess(true);
+          setIsProcessing(false);
+        })
+        .catch((error) => {
+          console.error("Error verifying email:", error);
+          setPopup({ 
+            message: "Verification link expired or invalid.", 
+            icon: <AlertCircle className="text-cyber-red" /> 
+          });
+          setIsProcessing(false);
+          setAuthMode('signin');
+        });
+    } else if (mode === 'verifyEmail' && urlParams.get('success') === 'true') {
+      setIsVerifySuccess(true);
+    }
+  }, []);
 
   useEffect(() => {
     async function testConnection() {
@@ -238,7 +342,6 @@ export default function App() {
 
   const isLoggingIn = useRef(false);
   const isLoggingOut = useRef(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let userDocUnsubscribe: (() => void) | null = null;
@@ -267,14 +370,15 @@ export default function App() {
             isSuperAdmin: firebaseUser.email === 'mjdl05010710@gmail.com',
             shouldRedirect: !firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com'
           });
-          // if (!firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com') {
-          //   console.log("Email not verified, redirecting to verify screen");
-          //   setUser(null);
-          //   setAuthMode('verify');
-          //   setLoading(false);
-          //   setLoginLoading(false);
-          //   return;
-          // }
+          if (!firebaseUser.emailVerified && firebaseUser.email !== 'mjdl05010710@gmail.com') {
+            console.log("Email not verified, redirecting to verify screen");
+            setUser(null);
+            setAuthMode('verify');
+            setLoading(false);
+            setLoginLoading(false);
+            setIsProcessing(false);
+            return;
+          }
 
           // Set up real-time listener for the current user's document
           userDocUnsubscribe = onSnapshot(doc(db, 'users', firebaseUser.uid), async (snapshot) => {
@@ -475,27 +579,6 @@ export default function App() {
         handleFirestoreError(error, OperationType.LIST, 'announcements');
       });
 
-      // Inactivity timer
-      const resetTimer = () => {
-        setIsInteracting(true);
-        setTimeLeft(600);
-        setTimeout(() => setIsInteracting(false), 2000);
-      };
-
-      window.addEventListener('mousedown', resetTimer);
-      window.addEventListener('keydown', resetTimer);
-      window.addEventListener('touchstart', resetTimer);
-
-      timerRef.current = setInterval(() => {
-        setTimeLeft(prev => {
-          if (prev <= 1) {
-            handleLogout('inactivity');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-
       // Listen for profile data
       const unsubFolders = onSnapshot(collection(db, `users/${user.uid}/folders`), (snapshot) => {
         setMyFolders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -516,10 +599,6 @@ export default function App() {
         unsubFiles();
         unsubNotes();
         unsubMembers();
-        window.removeEventListener('mousedown', resetTimer);
-        window.removeEventListener('keydown', resetTimer);
-        window.removeEventListener('touchstart', resetTimer);
-        if (timerRef.current) clearInterval(timerRef.current);
       };
     }
   }, [user]);
@@ -541,25 +620,115 @@ export default function App() {
     setProfileLoading(false);
   };
 
-  const handleAddFile = async () => {
-    if (!newFileName.trim() || !user) return;
+    const handleAddFile = async () => {
+    if (!newFileName.trim() || !user || !selectedFile) return;
+    
+    if (!supabaseClient) {
+      setPopup({ message: "Supabase not configured. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to secrets.", icon: <AlertCircle className="text-cyber-red" /> });
+      return;
+    }
+
     setProfileLoading(true);
+    setUploadProgress(0);
+    
     try {
+      // 1. Upload to Supabase Storage
+      const fileExt = selectedFile.name.split('.').pop();
+      const uuid = Math.random().toString(36).substring(2);
+      const folderId = newFileFolder || 'root';
+      const filePath = `${user.uid}/files/${folderId}/${uuid}.${fileExt}`;
+
+      const { data, error: uploadError } = await supabaseClient.storage
+        .from(STORAGE_BUCKET)
+        .upload(filePath, selectedFile, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) throw uploadError;
+
+      // 2. Save to Firestore
       await addDoc(collection(db, `users/${user.uid}/files`), {
         name: newFileName.trim(),
         folderId: newFileFolder || null,
-        size: newFileSize || '0 KB',
+        size: newFileSize || `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`,
+        storagePath: filePath,
+        bucket: STORAGE_BUCKET,
         createdAt: serverTimestamp()
       });
+
       setNewFileName('');
       setNewFileFolder('');
       setNewFileSize('');
+      setSelectedFile(null);
+      setUploadProgress(0);
       setIsFileModalOpen(false);
-    } catch (e) {
+      setPopup({ message: "File uploaded successfully", icon: <CheckCircle2 className="text-cyber-blue" /> });
+    } catch (e: any) {
       console.error(e);
-      setPopup({ message: "Error adding file", icon: <AlertCircle className="text-cyber-red" /> });
+      let errorMsg = e.message || "Error uploading file";
+      if (errorMsg.includes("Bucket not found")) {
+        errorMsg = "Bucket 'Jollideej' not found. Please create a private bucket named 'Jollideej' in your Supabase Storage dashboard.";
+      }
+      setPopup({ message: errorMsg, icon: <AlertCircle className="text-cyber-red" /> });
     }
     setProfileLoading(false);
+  };
+
+  const handleDeleteFile = async (file: any) => {
+    if (!user) return;
+    setConfirmModal({
+      message: `Are you sure you want to delete "${file.name}"? This will permanently remove it from storage.`,
+      onConfirm: async () => {
+        setProfileLoading(true);
+        try {
+          // 1. Delete from Supabase Storage
+          if (file.storagePath) {
+            if (!supabaseClient) {
+              throw new Error("Supabase not configured");
+            }
+            const { error: deleteError } = await supabaseClient.storage
+              .from(STORAGE_BUCKET)
+              .remove([file.storagePath]);
+            if (deleteError) throw deleteError;
+          }
+
+          // 2. Delete from Firestore
+          await deleteDoc(doc(db, `users/${user.uid}/files`, file.id));
+          
+          setPopup({ message: "File deleted successfully", icon: <Trash2 className="text-cyber-red" /> });
+        } catch (e: any) {
+          console.error(e);
+          setPopup({ message: e.message || "Error deleting file", icon: <AlertCircle className="text-cyber-red" /> });
+        }
+        setProfileLoading(false);
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const handleDownloadFile = async (file: any) => {
+    if (!file.storagePath || !supabaseClient) return;
+    try {
+      const signedUrl = await getSignedUrl(file.bucket || STORAGE_BUCKET, file.storagePath);
+      if (signedUrl) {
+        window.open(signedUrl, '_blank');
+      }
+    } catch (e) {
+      console.error("Error downloading file:", e);
+    }
+  };
+
+  const handleProfilePicUpload = async (storagePath: string, signedUrl: string) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        profilePic: storagePath
+      });
+      setPopup({ message: "Profile picture updated", icon: <CheckCircle2 className="text-cyber-green" /> });
+    } catch (e) {
+      console.error("Error updating profile pic:", e);
+    }
   };
 
   const handleAddNote = async () => {
@@ -626,6 +795,7 @@ export default function App() {
     }
     
     setLoginLoading(true);
+    isLoggingIn.current = true;
     setIsProcessing(true);
     console.log("Attempting login for:", trimmedEmail);
     let loginEmail = trimmedEmail;
@@ -1281,19 +1451,65 @@ export default function App() {
     setProfileLoading(false);
   };
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
   if (loading) return <LoadingScreen />;
   if (isProcessing) return <LoadingScreen message="Processing..." />;
+
+  if (isVerifySuccess) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-black overflow-hidden relative">
+        <AnimatePresence>
+          {popup && <Popup message={popup.message} icon={popup.icon} onClose={() => setPopup(null)} />}
+        </AnimatePresence>
+        {/* Background Glows */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none gpu-accelerated">
+          <div className="absolute -top-24 -left-24 w-96 h-96 bg-cyber-blue/20 blur-[120px] rounded-full animate-pulse" />
+          <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-cyber-green/20 blur-[120px] rounded-full animate-pulse" style={{ animationDelay: '1s' }} />
+        </div>
+
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="glass p-12 rounded-[40px] text-center w-full max-w-lg border-cyber-blue/30 shadow-[0_0_100px_rgba(79,209,255,0.1)] relative z-10"
+        >
+          <div className="relative z-10">
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", damping: 12, stiffness: 200, delay: 0.2 }}
+              className="w-24 h-24 bg-gradient-to-br from-cyber-blue to-cyber-green rounded-full mx-auto mb-8 flex items-center justify-center shadow-[0_0_30px_rgba(79,209,255,0.5)]"
+            >
+              <CheckCircle2 size={48} className="text-black" />
+            </motion.div>
+
+            <h1 className="text-5xl font-black cyber-text mb-4 uppercase tracking-tighter">Identity Verified</h1>
+            <p className="text-white/60 text-lg mb-10 font-light leading-relaxed">
+              Your neural link has been established. <br/>
+              <span className="text-cyber-blue font-bold">Access granted</span> to the secure network.
+            </p>
+
+            <button 
+              onClick={() => {
+                setIsVerifySuccess(false);
+                setAuthMode('signin');
+                window.history.replaceState({}, '', window.location.pathname);
+              }}
+              className="cyber-button w-full py-5 text-xl uppercase tracking-[0.2em] font-black"
+            >
+              Enter System
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   if (!user) {
     if (authMode === 'verify') {
       return (
         <div className="flex items-center justify-center min-h-screen">
+          <AnimatePresence>
+            {popup && <Popup message={popup.message} icon={popup.icon} onClose={() => setPopup(null)} />}
+          </AnimatePresence>
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1315,15 +1531,15 @@ export default function App() {
               </button>
               <button 
                 onClick={handleResendVerification} 
-                className="w-full py-2 text-sm text-white/50 hover:text-white transition-colors"
+                className="w-full py-3 text-sm text-cyber-blue border border-cyber-blue/20 rounded-xl hover:bg-cyber-blue/10 transition-all duration-300 font-orbitron tracking-widest uppercase"
               >
                 Resend Verification Email
               </button>
               <button 
                 onClick={() => setAuthMode('signin')} 
-                className="w-full py-2 text-sm text-cyber-blue hover:underline"
+                className="w-full py-2 text-sm text-white/40 hover:text-white transition-colors"
               >
-                Back to Login
+                Back to Sign In
               </button>
             </div>
           </motion.div>
@@ -1333,8 +1549,11 @@ export default function App() {
 
     return (
       <div className="flex items-center justify-center min-h-screen bg-black overflow-hidden relative">
+        <AnimatePresence>
+          {popup && <Popup message={popup.message} icon={popup.icon} onClose={() => setPopup(null)} />}
+        </AnimatePresence>
         {/* Animated Background Elements */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute inset-0 overflow-hidden pointer-events-none gpu-accelerated">
           <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-cyber-blue/10 rounded-full blur-[120px] animate-pulse" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-cyber-purple/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
         </div>
@@ -1436,8 +1655,8 @@ export default function App() {
             {authMode === 'signin' && (
               <button 
                 onClick={handleForgotPassword} 
-                disabled={loginLoading || !email}
-                className="w-full py-2 text-sm text-white/50 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={loginLoading}
+                className="w-full py-3 text-sm text-cyber-blue border border-cyber-blue/20 rounded-xl hover:bg-cyber-blue/10 transition-all duration-300 font-orbitron tracking-widest uppercase disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 Forgot Password?
               </button>
@@ -1459,13 +1678,13 @@ export default function App() {
   ];
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen overflow-hidden gpu-accelerated">
       <AnimatePresence>
         {popup && <Popup message={popup.message} icon={popup.icon} onClose={() => setPopup(null)} />}
       </AnimatePresence>
 
       {/* Taskbar */}
-      <header className="fixed top-0 left-0 right-0 h-14 glass flex items-center justify-between px-4 z-50">
+      <header className="fixed top-0 left-0 right-0 h-14 glass flex items-center justify-between px-4 z-50 gpu-accelerated">
         <div className="flex items-center gap-4">
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
             <Menu size={20} />
@@ -1474,10 +1693,7 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-4">
-          <div className="bg-black/40 px-3 py-1 rounded-lg text-sm font-mono flex items-center gap-2">
-            <span className="animate-pulse text-cyber-blue">⏳</span>
-            {formatTime(timeLeft)}
-          </div>
+          <InactivityTimer onLogout={handleLogout} />
           <button onClick={() => handleLogout()} className="p-2 bg-cyber-red/20 hover:bg-cyber-red/40 text-cyber-red rounded-lg transition-colors">
             <LogOut size={18} />
           </button>
@@ -1486,18 +1702,18 @@ export default function App() {
 
       {/* Sidebar */}
       <aside className={cn(
-        "pt-14 glass transition-all duration-300 flex flex-col z-40",
+        "pt-14 glass transition-all duration-300 flex flex-col z-40 gpu-accelerated",
         sidebarCollapsed ? "w-16" : "w-64"
       )}>
         <div className="p-4 flex flex-col items-center border-bottom border-white/10">
           <div className="relative group">
-            <img 
-              src={user.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} 
-              alt="Profile" 
+            <UserAvatar 
+              user={user} 
               className={cn(
                 "rounded-full border-2 border-white/30 transition-all duration-300 group-hover:scale-110 group-hover:border-cyber-blue",
                 sidebarCollapsed ? "w-10 h-10" : "w-20 h-20"
               )}
+              size={sidebarCollapsed ? 40 : 80}
             />
             <div className="absolute bottom-0 right-0 w-3 h-3 bg-cyber-green rounded-full border-2 border-black shadow-[0_0_10px_#00ffc8] animate-pulse" />
           </div>
@@ -1578,7 +1794,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                className="space-y-8"
+                className="space-y-8 gpu-accelerated"
               >
                 <div className="text-center space-y-2">
                   <h1 className="text-4xl font-black cyber-text">Dashboard</h1>
@@ -1643,12 +1859,18 @@ export default function App() {
                 <div className="glass p-8 rounded-3xl flex flex-col md:flex-row items-center gap-8 relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-64 h-64 bg-cyber-blue/5 blur-[100px] -mr-32 -mt-32" />
                   
-                  <div className="relative">
-                    <div className="w-32 h-32 rounded-full border-4 border-cyber-blue/30 p-1 bg-black/40">
-                      <img 
-                        src={user.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} 
-                        alt="Profile" 
-                        className="w-full h-full rounded-full object-cover"
+                  <div className="relative group">
+                    <div className="w-32 h-32 rounded-full border-4 border-cyber-blue/30 p-1 bg-black/40 overflow-hidden">
+                      <UserAvatar 
+                        user={user} 
+                        className="w-full h-full rounded-full"
+                        size={128}
+                      />
+                    </div>
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 rounded-full">
+                      <FileUpload 
+                        path={`${user.uid}/avatars/`} 
+                        onUploadComplete={handleProfilePicUpload} 
                       />
                     </div>
                     <div className="absolute bottom-2 right-2 w-6 h-6 bg-cyber-green rounded-full border-4 border-black shadow-[0_0_10px_#00ffc8]" />
@@ -1737,6 +1959,22 @@ export default function App() {
                                   <p className="font-medium">{file.name}</p>
                                   <p className="text-xs text-white/40">{file.size} • {file.folderId ? 'In Folder' : 'Root'}</p>
                                 </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <button 
+                                  onClick={() => handleDownloadFile(file)}
+                                  className="p-2 text-cyber-blue hover:bg-cyber-blue/20 rounded-lg transition-colors"
+                                  title="Download"
+                                >
+                                  <Download size={18} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteFile(file)}
+                                  className="p-2 text-cyber-red hover:bg-cyber-red/20 rounded-lg transition-colors"
+                                  title="Delete"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1923,7 +2161,7 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="space-y-6"
+                className="space-y-6 gpu-accelerated"
               >
                 <button onClick={() => setActivePage(currentSubject || 'home')} className="flex items-center gap-2 text-cyber-blue hover:underline">
                   <ChevronLeft size={20} /> Back to Topics
@@ -1979,7 +2217,7 @@ export default function App() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="max-w-2xl mx-auto space-y-6"
+                className="max-w-2xl mx-auto space-y-6 gpu-accelerated"
               >
                 <button onClick={() => setActivePage(currentSubject || 'home')} className="flex items-center gap-2 text-cyber-blue hover:underline">
                   <ChevronLeft size={20} /> Back to Topics
@@ -2056,7 +2294,7 @@ export default function App() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                className="space-y-8"
+                className="space-y-8 gpu-accelerated"
               >
                 <div className="text-center space-y-2">
                   <h1 className="text-4xl font-black cyber-text">Admin Panel</h1>
@@ -2082,7 +2320,7 @@ export default function App() {
                       {allUsers.map(u => (
                         <div key={u.uid} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
                           <div className="flex items-center gap-3">
-                            <img src={u.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} className="w-10 h-10 rounded-full" />
+                            <UserAvatar user={u} className="w-10 h-10 rounded-full" />
                             <div>
                               <p className="font-bold text-sm">{u.username}</p>
                               <span className={cn(
@@ -2130,7 +2368,7 @@ export default function App() {
                         onlineUsers.map(u => (
                           <div key={u.uid} className="flex items-center gap-3 p-3 bg-white/5 rounded-xl border border-white/5">
                             <div className="relative">
-                              <img src={u.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} className="w-8 h-8 rounded-full" />
+                              <UserAvatar user={u} className="w-8 h-8 rounded-full" size={32} />
                               <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-cyber-green rounded-full border-2 border-black" />
                             </div>
                             <div>
@@ -2195,7 +2433,7 @@ export default function App() {
                     {allUsers.map(u => (
                       <div key={u.uid} className="flex items-center justify-between p-4 bg-white/5 rounded-xl border border-white/10">
                         <div className="flex items-center gap-3">
-                          <img src={u.profilePic || "https://cdn-icons-png.flaticon.com/512/847/847969.png"} className="w-10 h-10 rounded-full" />
+                          <UserAvatar user={u} className="w-10 h-10 rounded-full" />
                           <div>
                             <p className="font-bold text-sm">{u.username}</p>
                             <p className="text-[10px] text-white/40">{u.email}</p>
@@ -2292,16 +2530,57 @@ export default function App() {
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="glass p-6 rounded-3xl w-full max-w-md">
               <h3 className="text-xl font-bold mb-4">Add File</h3>
               <div className="space-y-4 mb-6">
-                <input type="text" value={newFileName} onChange={e => setNewFileName(e.target.value)} placeholder="File Name (e.g., document.pdf)" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" autoFocus />
+                <div className="relative group">
+                  <input 
+                    type="file" 
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setSelectedFile(file);
+                        if (!newFileName) setNewFileName(file.name);
+                        setNewFileSize(`${(file.size / 1024 / 1024).toFixed(2)} MB`);
+                      }
+                    }} 
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  />
+                  <div className="w-full bg-black/40 border border-dashed border-white/20 rounded-xl px-4 py-8 text-center group-hover:border-cyber-blue transition-colors">
+                    <Upload className="mx-auto mb-2 text-white/40 group-hover:text-cyber-blue" size={32} />
+                    <p className="text-sm text-white/60">
+                      {selectedFile ? selectedFile.name : "Click or drag to upload file"}
+                    </p>
+                  </div>
+                </div>
+
+                <input type="text" value={newFileName} onChange={e => setNewFileName(e.target.value)} placeholder="File Name" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" />
+                
                 <select value={newFileFolder} onChange={e => setNewFileFolder(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none appearance-none">
                   <option value="">Root (No Folder)</option>
                   {myFolders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                 </select>
-                <input type="text" value={newFileSize} onChange={e => setNewFileSize(e.target.value)} placeholder="Size (e.g., 2.5 MB)" className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-cyber-blue outline-none" />
+
+                <p className="text-[10px] text-white/30 italic">
+                  Note: Ensure you have created a private bucket named <span className="text-cyber-blue">"Jollideej"</span> in your Supabase dashboard.
+                </p>
+
+                {profileLoading && (
+                  <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
+                    <motion.div 
+                      className="bg-cyber-blue h-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: 2, ease: "linear" }}
+                    />
+                  </div>
+                )}
               </div>
               <div className="flex justify-end gap-3">
-                <button onClick={() => setIsFileModalOpen(false)} className="px-4 py-2 rounded-xl hover:bg-white/10 transition-colors">Cancel</button>
-                <button onClick={handleAddFile} disabled={profileLoading || !newFileName.trim()} className="cyber-button px-6 py-2 disabled:opacity-50">Add</button>
+                <button onClick={() => {
+                  setIsFileModalOpen(false);
+                  setSelectedFile(null);
+                }} className="px-4 py-2 rounded-xl hover:bg-white/10 transition-colors">Cancel</button>
+                <button onClick={handleAddFile} disabled={profileLoading || !newFileName.trim() || !selectedFile} className="cyber-button px-6 py-2 disabled:opacity-50">
+                  {profileLoading ? "Uploading..." : "Upload"}
+                </button>
               </div>
             </motion.div>
           </div>
@@ -2359,11 +2638,11 @@ interface SidebarItemProps {
   onClick: () => void;
 }
 
-const SidebarItem: React.FC<SidebarItemProps> = ({ icon, label, active, collapsed, onClick }) => (
+const SidebarItem: React.FC<SidebarItemProps> = React.memo(({ icon, label, active, collapsed, onClick }) => (
   <button 
     onClick={onClick}
     className={cn(
-      "w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-300 relative group",
+      "w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-300 relative group gpu-accelerated",
       active ? "bg-cyber-blue/20 text-cyber-blue shadow-[0_0_10px_rgba(79,209,255,0.3)]" : "hover:bg-white/5 text-white/60 hover:text-white"
     )}
   >
@@ -2385,4 +2664,4 @@ const SidebarItem: React.FC<SidebarItemProps> = ({ icon, label, active, collapse
       />
     )}
   </button>
-);
+));

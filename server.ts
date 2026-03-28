@@ -183,6 +183,13 @@ async function startServer() {
     }
   });
 
+  app.get("/api/config/supabase", (req, res) => {
+    res.json({
+      url: process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL,
+      anonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY,
+    });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
