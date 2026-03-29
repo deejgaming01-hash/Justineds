@@ -86,7 +86,7 @@ export const TOPIC_NAMES: Record<string, string[]> = {
     "Rotational Motion", "Gravity", "Waves", "Electricity"
   ],
   MFE: [
-    "Functions", "Limits", "Derivatives", "Applications",
+    "Conic Section", "Circles", "Ellipse", "Hyperbola and Polar Coordination",
     "Integration Basics", "Advanced Integration", "Series", "Differential Equations"
   ],
   INTEGRAL: [
@@ -107,7 +107,7 @@ export const TOPIC_NAMES: Record<string, string[]> = {
   ],
   UTS: [
     "The Anthropological Perspective of the Self", "The Psychological Perspective of the Self", "The Sociological Perspective of the Self", "The Self in Western and Eastern Thought",
-    "Physical Self", "Relationships", "Growth", "Reflection"
+    "Physical Self", "Unfolding the Sexual Self", "Growth", "Reflection"
   ]
 };
 
