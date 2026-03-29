@@ -22,14 +22,19 @@ let client: SupabaseClient | null = null;
 const { url, key } = getKeys();
 if (isValidUrl(url) && key) {
   client = createClient(url, key);
+} else {
+  console.warn("Supabase configuration is missing. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your environment variables.");
 }
 
-export const supabase = client;
+// Export a getter so other files always get the latest client
+export const getSupabase = () => client;
+export { client as supabase };
 
 // Helper to get signed URL for private files
 export const getSignedUrl = async (bucket: string, path: string, expiresIn = 3600) => {
-  if (!supabase) return null;
-  const { data, error } = await supabase.storage
+  const currentClient = getSupabase();
+  if (!currentClient) return null;
+  const { data, error } = await currentClient.storage
     .from(bucket)
     .createSignedUrl(path, expiresIn);
   if (error) {
@@ -40,12 +45,13 @@ export const getSignedUrl = async (bucket: string, path: string, expiresIn = 360
 };
 
 // Helper to check if it's configured
-export const isSupabaseConfigured = () => !!supabase;
+export const isSupabaseConfigured = () => !!getSupabase();
 
 // Optional: Function to re-initialize if keys are provided later
 export const reinitializeSupabase = (url: string, key: string) => {
   if (isValidUrl(url) && key) {
-    return createClient(url, key);
+    client = createClient(url, key);
+    return client;
   }
   return null;
 };

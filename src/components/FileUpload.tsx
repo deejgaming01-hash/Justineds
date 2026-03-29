@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase, getSignedUrl } from '../supabase';
+import { getSupabase, getSignedUrl } from '../supabase';
 import { Upload, X, Loader2 } from 'lucide-react';
 
 interface FileUploadProps {
@@ -13,7 +13,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({ path, bucket = 'Jollidee
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !supabase) return;
+    const currentClient = getSupabase();
+    if (!file || !currentClient) return;
 
     setUploading(true);
     try {
@@ -21,7 +22,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ path, bucket = 'Jollidee
       const uuid = Math.random().toString(36).substring(2);
       const fullPath = `${path}${uuid}.${fileExt}`;
 
-      const { data, error } = await supabase.storage
+      const { data, error } = await currentClient.storage
         .from(bucket)
         .upload(fullPath, file, {
           cacheControl: '3600',
