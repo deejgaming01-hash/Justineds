@@ -61,6 +61,7 @@ import { GoogleGenAI } from "@google/genai";
 import { cn } from './lib/utils';
 import { supabase, reinitializeSupabase, getSignedUrl } from './supabase';
 import { UserAvatar } from './components/UserAvatar';
+import { AdBanner } from './components/AdBanner';
 import { FileUpload } from './components/FileUpload';
 import { User, Announcement, ActivityLog, LoginLog, QuizQuestion, UserRole } from './types';
 import { FOLDER_MAP, PDF_LINKS, TOPIC_NAMES } from './constants';
@@ -2564,6 +2565,10 @@ export default function App() {
               </motion.div>
             )}
           </AnimatePresence>
+          
+          <div className="mt-8">
+            <AdBanner dataAdSlot="9748025980" />
+          </div>
         </div>
       </main>
 

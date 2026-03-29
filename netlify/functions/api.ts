@@ -174,6 +174,13 @@ router.get("/drive/quiz/:folderId", async (req, res) => {
   }
 });
 
+router.get("/config/supabase", (req, res) => {
+  res.json({
+    url: process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL,
+    anonKey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY,
+  });
+});
+
 app.use("/api", router);
 app.use("/.netlify/functions/api", router);
 
