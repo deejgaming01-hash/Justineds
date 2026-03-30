@@ -223,7 +223,7 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [verificationEmail, setVerificationEmail] = useState('');
-  const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'verify'>('signin');
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | 'verify' | 'forgot_password'>('signin');
   const [activePage, setActivePage] = useState('home');
   const [isVerifySuccess, setIsVerifySuccess] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1056,7 +1056,11 @@ export default function App() {
     
     setLoginLoading(true);
     try {
-      await sendPasswordResetEmail(auth, email);
+      const actionCodeSettings = {
+        url: window.location.origin,
+        handleCodeInApp: false,
+      };
+      await sendPasswordResetEmail(auth, email, actionCodeSettings);
       setPopup({ message: "Password reset email sent! Please check your inbox.", icon: <CheckCircle2 className="text-cyber-blue" /> });
     } catch (error: any) {
       console.error("Password reset error:", error);
@@ -1626,30 +1630,47 @@ export default function App() {
         >
           <h1 className="text-4xl font-black cyber-text mb-8">Justine & Friends</h1>
           
-          <div className="flex gap-4 mb-8">
-            <button 
-              onClick={() => setAuthMode('signin')}
-              className={cn(
-                "flex-1 py-3 rounded-xl font-bold transition-all border",
-                authMode === 'signin' 
-                  ? "bg-cyber-blue/20 border-cyber-blue text-cyber-blue shadow-[0_0_15px_rgba(0,186,255,0.3)]" 
-                  : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
-              )}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={authMode}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
             >
-              Sign In
-            </button>
-            <button 
-              onClick={() => setAuthMode('signup')}
-              className={cn(
-                "flex-1 py-3 rounded-xl font-bold transition-all border",
-                authMode === 'signup' 
-                  ? "bg-cyber-blue/20 border-cyber-blue text-cyber-blue shadow-[0_0_15px_rgba(0,186,255,0.3)]" 
-                  : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
-              )}
-            >
-              Sign Up
-            </button>
-          </div>
+              {authMode !== 'forgot_password' && (
+                <div className="flex gap-4 mb-8">
+                  <button 
+                    onClick={() => setAuthMode('signin')}
+                className={cn(
+                  "flex-1 py-3 rounded-xl font-bold transition-all border",
+                  authMode === 'signin' 
+                    ? "bg-cyber-blue/20 border-cyber-blue text-cyber-blue shadow-[0_0_15px_rgba(0,186,255,0.3)]" 
+                    : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
+                )}
+              >
+                Sign In
+              </button>
+              <button 
+                onClick={() => setAuthMode('signup')}
+                className={cn(
+                  "flex-1 py-3 rounded-xl font-bold transition-all border",
+                  authMode === 'signup' 
+                    ? "bg-cyber-blue/20 border-cyber-blue text-cyber-blue shadow-[0_0_15px_rgba(0,186,255,0.3)]" 
+                    : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
+                )}
+              >
+                Sign Up
+              </button>
+            </div>
+          )}
+
+          {authMode === 'forgot_password' && (
+            <div className="mb-8 text-center">
+              <h2 className="text-2xl font-bold text-white mb-2">Reset Password</h2>
+              <p className="text-white/60 text-sm">Enter your email address to receive a password reset link.</p>
+            </div>
+          )}
 
           <div className="space-y-4 mb-8 text-left">
             {authMode === 'signup' && (
@@ -1682,51 +1703,83 @@ export default function App() {
                 />
               </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-white/70 mb-1">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
-                <input 
-                  type="password" 
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
-                  placeholder="Enter password"
-                />
+            {authMode !== 'forgot_password' && (
+              <div>
+                <label className="block text-sm font-medium text-white/70 mb-1">Password</label>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                  <input 
+                    type="password" 
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
+                    placeholder="Enter password"
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="space-y-4">
-            <button 
-              onClick={authMode === 'signin' ? handleLogin : handleSignup}
-              disabled={loginLoading}
-              className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {loginLoading ? (
-                <>
-                  <Loader2 className="animate-spin" size={20} />
-                  Processing...
+            {authMode === 'forgot_password' ? (
+              <>
+                <button 
+                  onClick={handleForgotPassword}
+                  disabled={loginLoading}
+                  className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {loginLoading ? (
+                    <>
+                      <Loader2 className="animate-spin" size={20} />
+                      Sending...
+                    </>
+                  ) : (
+                    "Send Reset Link"
+                  )}
+                </button>
+                <button 
+                  onClick={() => setAuthMode('signin')} 
+                  disabled={loginLoading}
+                  className="w-full py-3 text-sm text-white/60 hover:text-white transition-colors flex items-center justify-center gap-2"
+                >
+                  <ArrowLeft size={16} /> Back to Sign In
+                </button>
+              </>
+            ) : (
+              <>
+                <button 
+                  onClick={authMode === 'signin' ? handleLogin : handleSignup}
+                  disabled={loginLoading}
+                  className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {loginLoading ? (
+                    <>
+                      <Loader2 className="animate-spin" size={20} />
+                      Processing...
+                    </>
+                  ) : (
+                      authMode === 'signin' ? "Sign In" : "Sign Up"
+                    )}
+                  </button>
+                  
+                  {authMode === 'signin' && (
+                    <button 
+                      onClick={() => setAuthMode('forgot_password')} 
+                      disabled={loginLoading}
+                      className="w-full py-3 text-sm text-cyber-blue border border-cyber-blue/20 rounded-xl hover:bg-cyber-blue/10 transition-all duration-300 font-orbitron tracking-widest uppercase disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      Forgot Password?
+                    </button>
+                  )}
                 </>
-              ) : (
-                authMode === 'signin' ? "Sign In" : "Sign Up"
               )}
-            </button>
-            
-            {authMode === 'signin' && (
-              <button 
-                onClick={handleForgotPassword} 
-                disabled={loginLoading}
-                className="w-full py-3 text-sm text-cyber-blue border border-cyber-blue/20 rounded-xl hover:bg-cyber-blue/10 transition-all duration-300 font-orbitron tracking-widest uppercase disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                Forgot Password?
-              </button>
-            )}
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      </motion.div>
+    </div>
+  );
+}
 
   const subjects = [
     { id: 'physics', name: 'Physics', icon: <Zap className="text-yellow-400" />, color: 'from-yellow-400/20 to-orange-500/20' },
