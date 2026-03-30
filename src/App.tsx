@@ -1612,6 +1612,13 @@ export default function App() {
       );
     }
 
+    const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (authMode === 'signin') handleLogin();
+      else if (authMode === 'signup') handleSignup();
+      else if (authMode === 'forgot_password') handleForgotPassword();
+    };
+
     return (
       <div className="flex items-center justify-center min-h-screen bg-black overflow-hidden relative">
         <AnimatePresence>
@@ -1671,109 +1678,112 @@ export default function App() {
               <p className="text-white/60 text-sm">Enter your email address to receive a password reset link.</p>
             </div>
           )}
-
-          <div className="space-y-4 mb-8 text-left">
-            {authMode === 'signup' && (
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4 mb-8 text-left">
+              {authMode === 'signup' && (
+                <div>
+                  <label className="block text-sm font-medium text-white/70 mb-1">Username</label>
+                  <div className="relative">
+                    <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                    <input 
+                      type="text" 
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
+                      placeholder="Enter username"
+                    />
+                  </div>
+                </div>
+              )}
               <div>
-                <label className="block text-sm font-medium text-white/70 mb-1">Username</label>
+                <label className="block text-sm font-medium text-white/70 mb-1">
+                  {authMode === 'signin' ? 'Username or Email' : 'Email Address'}
+                </label>
                 <div className="relative">
-                  <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
                   <input 
-                    type="text" 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    type="text"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
-                    placeholder="Enter username"
+                    placeholder={authMode === 'signin' ? 'Enter username or email' : 'Enter email'}
                   />
                 </div>
               </div>
-            )}
-            <div>
-              <label className="block text-sm font-medium text-white/70 mb-1">
-                {authMode === 'signin' ? 'Username or Email' : 'Email Address'}
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
-                <input 
-                  type="text"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
-                  placeholder={authMode === 'signin' ? 'Enter username or email' : 'Enter email'}
-                />
-              </div>
-            </div>
-            {authMode !== 'forgot_password' && (
-              <div>
-                <label className="block text-sm font-medium text-white/70 mb-1">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
-                  <input 
-                    type="password" 
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
-                    placeholder="Enter password"
-                  />
+              {authMode !== 'forgot_password' && (
+                <div>
+                  <label className="block text-sm font-medium text-white/70 mb-1">Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-white/30" />
+                    <input 
+                      type="password" 
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-black/40 border border-white/10 rounded-xl pl-11 pr-4 py-3 text-white focus:outline-none focus:border-cyber-blue transition-colors"
+                      placeholder="Enter password"
+                    />
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-4">
-            {authMode === 'forgot_password' ? (
-              <>
-                <button 
-                  onClick={handleForgotPassword}
-                  disabled={loginLoading}
-                  className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {loginLoading ? (
-                    <>
-                      <Loader2 className="animate-spin" size={20} />
-                      Sending...
-                    </>
-                  ) : (
-                    "Send Reset Link"
-                  )}
-                </button>
-                <button 
-                  onClick={() => setAuthMode('signin')} 
-                  disabled={loginLoading}
-                  className="w-full py-3 text-sm text-white/60 hover:text-white transition-colors flex items-center justify-center gap-2"
-                >
-                  <ArrowLeft size={16} /> Back to Sign In
-                </button>
-              </>
-            ) : (
-              <>
-                <button 
-                  onClick={authMode === 'signin' ? handleLogin : handleSignup}
-                  disabled={loginLoading}
-                  className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {loginLoading ? (
-                    <>
-                      <Loader2 className="animate-spin" size={20} />
-                      Processing...
-                    </>
-                  ) : (
-                      authMode === 'signin' ? "Sign In" : "Sign Up"
-                    )}
-                  </button>
-                  
-                  {authMode === 'signin' && (
-                    <button 
-                      onClick={() => setAuthMode('forgot_password')} 
-                      disabled={loginLoading}
-                      className="w-full py-3 text-sm text-cyber-blue border border-cyber-blue/20 rounded-xl hover:bg-cyber-blue/10 transition-all duration-300 font-orbitron tracking-widest uppercase disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      Forgot Password?
-                    </button>
-                  )}
-                </>
               )}
             </div>
+
+            <div className="space-y-4">
+              {authMode === 'forgot_password' ? (
+                <>
+                  <button 
+                    type="submit"
+                    disabled={loginLoading}
+                    className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {loginLoading ? (
+                      <>
+                        <Loader2 className="animate-spin" size={20} />
+                        Sending...
+                      </>
+                    ) : (
+                      "Send Reset Link"
+                    )}
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setAuthMode('signin')} 
+                    disabled={loginLoading}
+                    className="w-full py-3 text-sm text-white/60 hover:text-white transition-colors flex items-center justify-center gap-2"
+                  >
+                    <ArrowLeft size={16} /> Back to Sign In
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button 
+                    type="submit"
+                    disabled={loginLoading}
+                    className="cyber-button w-full py-4 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {loginLoading ? (
+                      <>
+                        <Loader2 className="animate-spin" size={20} />
+                        Processing...
+                      </>
+                    ) : (
+                        authMode === 'signin' ? "Sign In" : "Sign Up"
+                      )}
+                    </button>
+                    
+                    {authMode === 'signin' && (
+                      <button 
+                        type="button"
+                        onClick={() => setAuthMode('forgot_password')} 
+                        disabled={loginLoading}
+                        className="w-full py-3 text-sm text-cyber-blue border border-cyber-blue/20 rounded-xl hover:bg-cyber-blue/10 transition-all duration-300 font-orbitron tracking-widest uppercase disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        Forgot Password?
+                      </button>
+                    )}
+                  </>
+                )}
+            </div>
+          </form>
           </motion.div>
         </AnimatePresence>
       </motion.div>
