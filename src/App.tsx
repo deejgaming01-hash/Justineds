@@ -49,6 +49,7 @@ import {
   Lock,
   Mail,
   ArrowRight,
+  ArrowLeft,
   Folder,
   Users,
   File,
@@ -58,6 +59,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenAI } from "@google/genai";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { cn } from './lib/utils';
 import { supabase, reinitializeSupabase, getSignedUrl } from './supabase';
 import { UserAvatar } from './components/UserAvatar';
@@ -2579,39 +2581,72 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[1000] bg-black flex items-center justify-center"
+            className="fixed inset-0 z-[9999] bg-black w-full h-full flex flex-col"
           >
-            <button 
-              onClick={() => setFullscreen(false)}
-              className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full z-[1001]"
-            >
-              <X size={24} />
-            </button>
+            {/* Top Bar */}
+            <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-[10000] bg-gradient-to-b from-black/80 to-transparent">
+              <button 
+                onClick={() => setFullscreen(false)}
+                className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-full backdrop-blur-md transition-colors"
+              >
+                <ArrowLeft size={20} />
+                <span className="hidden sm:inline">Back</span>
+              </button>
+              
+              <div className="font-mono text-sm bg-black/50 px-4 py-1.5 rounded-full backdrop-blur-md">
+                {currentSlide + 1} / {viewerImages.length}
+              </div>
+              
+              <div className="w-[88px] hidden sm:block"></div> {/* Spacer for centering */}
+            </div>
             
-            <img 
-              src={viewerImages[currentSlide]} 
-              className="max-w-full max-h-full object-contain"
-              decoding="async"
-              fetchPriority="high"
-            />
-
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/10 px-6 py-2 rounded-full font-mono">
-              {currentSlide + 1} / {viewerImages.length}
+            <div className="relative z-[1000] w-full h-full flex-1">
+              <TransformWrapper
+                initialScale={1}
+                minScale={0.5}
+                maxScale={8}
+                centerOnInit={true}
+                centerZoomedOut={true}
+                wheel={{ step: 0.1 }}
+              >
+                <TransformComponent wrapperStyle={{ width: "100%", height: "100%" }} contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <img 
+                    src={viewerImages[currentSlide]} 
+                    className="max-w-full max-h-full object-contain cursor-grab active:cursor-grabbing select-none"
+                    decoding="async"
+                    fetchPriority="high"
+                    draggable={false}
+                  />
+                </TransformComponent>
+              </TransformWrapper>
             </div>
 
+            {/* Navigation Chevrons */}
             <button 
               onClick={(e) => { e.stopPropagation(); setCurrentSlide(prev => (prev - 1 + viewerImages.length) % viewerImages.length); }}
-              className="absolute left-6 top-1/2 -translate-y-1/2 p-4 bg-white/5 hover:bg-white/10 rounded-full"
+              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/80 rounded-full z-[10000] backdrop-blur-md transition-colors"
             >
               <ChevronLeft size={32} />
             </button>
             
             <button 
               onClick={(e) => { e.stopPropagation(); setCurrentSlide(prev => (prev + 1) % viewerImages.length); }}
-              className="absolute right-6 top-1/2 -translate-y-1/2 p-4 bg-white/5 hover:bg-white/10 rounded-full"
+              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/80 rounded-full z-[10000] backdrop-blur-md transition-colors"
             >
               <ChevronRight size={32} />
             </button>
+
+            {/* Bottom Slider */}
+            <div className="absolute bottom-0 left-0 right-0 p-6 z-[10000] bg-gradient-to-t from-black/80 to-transparent flex flex-col items-center gap-4">
+              <input 
+                type="range" 
+                min={0} 
+                max={viewerImages.length - 1} 
+                value={currentSlide}
+                onChange={(e) => setCurrentSlide(parseInt(e.target.value))}
+                className="w-full max-w-2xl h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-cyber-blue"
+              />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

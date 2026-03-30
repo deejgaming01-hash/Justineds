@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 interface AdBannerProps {
   dataAdSlot: string;
@@ -13,7 +13,12 @@ export const AdBanner: React.FC<AdBannerProps> = ({
   dataFullWidthResponsive = true,
   className = ''
 }) => {
+  const adInitialized = useRef(false);
+
   useEffect(() => {
+    if (adInitialized.current) return;
+    adInitialized.current = true;
+
     try {
       // @ts-ignore
       (window.adsbygoogle = window.adsbygoogle || []).push({});
