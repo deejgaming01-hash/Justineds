@@ -64,6 +64,7 @@ import { cn } from './lib/utils';
 import { supabase, reinitializeSupabase, getSignedUrl } from './supabase';
 import { UserAvatar } from './components/UserAvatar';
 import { AdBanner } from './components/AdBanner';
+import { AdsterraBanner } from './components/AdsterraBanner';
 import { FileUpload } from './components/FileUpload';
 import { User, Announcement, ActivityLog, LoginLog, QuizQuestion, UserRole } from './types';
 import { FOLDER_MAP, PDF_LINKS, TOPIC_NAMES } from './constants';
@@ -2631,8 +2632,10 @@ export default function App() {
             )}
           </AnimatePresence>
           
-          <div className="mt-8">
+          <div className="mt-8 space-y-4">
             <AdBanner dataAdSlot="9748025980" />
+            <AdsterraBanner adKey="923d9cc00be225a97055fd50dcdf99ef" width={728} height={90} />
+            <AdsterraBanner adKey="69f9ff53457ae5d39ffe958bf9f5fbf2" width={468} height={60} />
           </div>
         </div>
       </main>
